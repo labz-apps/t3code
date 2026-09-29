@@ -81,7 +81,7 @@ describe("ThreadDeletionReactor drain", () => {
 
   effectIt.effect("waits for a published deletion the subscriber has not consumed yet", () =>
     Effect.gen(function* () {
-      const stops: Array<number> = [];
+      const calls: Array<"delete" | "stop"> = [];
       const firstCleanupDone = yield* Deferred.make<void>();
       // The engine has already committed and published sequence 2, but the
       // subscriber has not received it yet: the stream releases it on demand.
@@ -97,12 +97,16 @@ describe("ThreadDeletionReactor drain", () => {
         ),
       } as unknown as OrchestrationEngineShape;
       const providerService = {
+        // Retirement runs before the stop: `stopSession` drops the handle the
+        // provider needs to reach the session it is meant to delete.
+        deleteSession: () =>
+          Effect.gen(function* () {
+            calls.push("delete");
+            yield* Deferred.succeed(firstCleanupDone, undefined);
+          }),
         stopSession: () =>
           Effect.gen(function* () {
-            stops.push(stops.length + 1);
-            if (stops.length === 1) {
-              yield* Deferred.succeed(firstCleanupDone, undefined);
-            }
+            calls.push("stop");
           }),
       } as unknown as ProviderServiceShape;
       const terminalManager = {
@@ -126,12 +130,12 @@ describe("ThreadDeletionReactor drain", () => {
           const drained = yield* Effect.forkChild(reactor.drainThrough(2));
           yield* Effect.yieldNow;
           yield* Effect.yieldNow;
-          expect(stops).toEqual([1]);
+          expect(calls).toEqual(["delete", "stop"]);
           expect(drained.pollUnsafe()).toBeUndefined();
 
           yield* Deferred.succeed(releaseSecondEvent, undefined);
           yield* Fiber.join(drained);
-          expect(stops).toEqual([1, 2]);
+          expect(calls).toEqual(["delete", "stop", "delete", "stop"]);
         }),
       ).pipe(Effect.provide(layer));
     }),

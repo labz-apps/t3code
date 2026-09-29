@@ -41,6 +41,7 @@ import {
   type ThreadSession,
   type TurnDiffSummary,
 } from "./types";
+import { resolveRuntimeWarningRecoveryLink } from "./runtimeWarningRecovery.logic";
 
 export type { PendingApproval, PendingUserInput } from "@t3tools/client-runtime/pending-requests";
 
@@ -62,6 +63,8 @@ export interface WorkLogEntry {
   toolCallId?: string;
   label: string;
   detail?: string;
+  /** Provider-supplied fix for a runtime warning ("Sign in", "Add credit"). */
+  recoveryLink?: string;
   viewedImagePath?: string;
   command?: string;
   rawCommand?: string;
@@ -606,6 +609,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       normalizePreviewForComparison(message) !== normalizePreviewForComparison(activity.summary)
     ) {
       entry.detail = message;
+    }
+  }
+  if (activity.kind === "runtime.warning") {
+    const recoveryLink = resolveRuntimeWarningRecoveryLink(payload);
+    if (recoveryLink) {
+      entry.recoveryLink = recoveryLink;
     }
   }
   if (viewedImagePath) {

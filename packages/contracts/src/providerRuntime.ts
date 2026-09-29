@@ -494,6 +494,13 @@ export type UserInputQuestion = typeof UserInputQuestion.Type;
 export const UserInputRequestedPayload = Schema.Struct({
   questions: Schema.Array(UserInputQuestion),
   responseMode: Schema.optional(Schema.Literal("message")),
+  /**
+   * The provider can abandon this request instead of answering it, so a client
+   * may offer a dismiss affordance. Independent of `responseMode`: that one
+   * describes how an answer comes back (a plain chat reply satisfies it), while
+   * this one describes whether the question can be walked away from at all.
+   */
+  dismissible: Schema.optional(Schema.Boolean),
 });
 export type UserInputRequestedPayload = typeof UserInputRequestedPayload.Type;
 
@@ -804,6 +811,12 @@ export type ToolDeniedPayload = typeof ToolDeniedPayload.Type;
 const RuntimeWarningPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
   detail: Schema.optional(Schema.Unknown),
+  /**
+   * Recovery affordance the provider attached to a warning — OpenCode ships
+   * one on a retry status ("Sign in", "Add credit"). Without it the user sees
+   * that something is wrong but has to guess the fix.
+   */
+  link: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type RuntimeWarningPayload = typeof RuntimeWarningPayload.Type;
 

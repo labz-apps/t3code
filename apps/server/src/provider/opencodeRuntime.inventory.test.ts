@@ -79,7 +79,10 @@ it.layer(testLayer)("OpenCodeRuntime inventory", (it) => {
                       {
                         name: "review",
                         description: "Review changes",
+                        agent: "plan",
+                        model: "anthropic/claude-opus-5",
                         source: "command",
+                        subtask: true,
                         hints: ["$ARGUMENTS"],
                         template: "private native template",
                       },
@@ -95,7 +98,10 @@ it.layer(testLayer)("OpenCodeRuntime inventory", (it) => {
         {
           name: "review",
           description: "Review changes",
+          agent: "plan",
+          model: "anthropic/claude-opus-5",
           source: "command",
+          subtask: true,
           hints: ["$ARGUMENTS"],
         },
       ]);

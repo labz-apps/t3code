@@ -90,13 +90,10 @@ import {
 /**
  * Everyday harnesses start expanded; every other provider (OpenRouter catalogs
  * and friends) starts folded so a 300-model catalog cannot bury the list. All
- * provider headers remain user-collapsible.
+ * provider headers remain user-collapsible. OpenCode is the only driver this
+ * build ships, so it is the only one that starts expanded.
  */
-const PRIMARY_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
-  "claudeAgent",
-  "codex",
-  "antigravity",
-]);
+const PRIMARY_PROVIDER_DRIVERS: ReadonlySet<string> = new Set(["opencode"]);
 /**
  * Keep measured row changes stable, but let catalog mutations use the list's
  * native bounds so a filtered catalog that underflows returns to the top.

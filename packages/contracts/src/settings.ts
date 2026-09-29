@@ -836,10 +836,13 @@ export type AntigravitySettings = typeof AntigravitySettings.Type;
 
 export const OpenCodeSettings = makeProviderSettingsSchema(
   {
-    // Off by default (like Cursor and Grok): the binding is not yet stable
-    // enough to probe on every install. Users opt in from Settings.
+    // On by default: OpenCode is the only driver this build offers, so an
+    // install that has never touched the flag should be usable immediately.
+    // The flag is never persisted (see `PERSISTED_SERVER_SETTINGS_DEFAULTS`
+    // in the server), which is what lets the default flip without rewriting
+    // existing settings files.
     enabled: Schema.Boolean.pipe(
-      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.withDecodingDefault(Effect.succeed(true)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
     binaryPath: makeBinaryPathSetting("opencode").pipe(

@@ -611,9 +611,14 @@ function PairingForm({
   );
 }
 
-// ── Step 3: agents ───────────────────────────────────────────
+// ── Step 3: the agent ───────────────────────────────────────
 
-const PRIMARY_AGENT_DRIVERS = ["claudeAgent", "codex"] as const;
+/**
+ * OpenCode is the only driver this build ships (see `BUILT_IN_DRIVERS`), so the
+ * wizard offers exactly one. The list is still a list so a fork that registers
+ * another driver can extend it in one place.
+ */
+const PRIMARY_AGENT_DRIVERS = ["opencode"] as const;
 type OnboardingAgentDriver = (typeof PRIMARY_AGENT_DRIVERS)[number];
 
 /** Setup values stay fixed while provider probes refresh the surrounding cards. */
@@ -627,11 +632,11 @@ interface AgentTerminalSession {
 }
 
 /**
- * Claude Code and Codex use live probe status. Install opens the built-in
- * terminal inline with the vendor's standalone installer pre-typed. The update
- * RPC can't install a binary that isn't there yet (it infers the installer from
- * the installed binary's path), and the terminal also handles the interactive
- * login that follows.
+ * OpenCode uses live probe status. Install opens the built-in terminal inline
+ * with the installer pre-typed. The update RPC can't install a binary that
+ * isn't there yet (it infers the installer from the installed binary's path),
+ * and the terminal also handles the interactive `opencode auth login` that
+ * follows — T3 does not own OpenCode's credentials.
  */
 function AgentsStep({
   environmentIds,
@@ -642,7 +647,7 @@ function AgentsStep({
 }) {
   const { environments } = useEnvironments();
   return (
-    <StepShell title="Your agents" description="Agents available on your selected computers.">
+    <StepShell title="Your agent" description="T3 Code runs on OpenCode.">
       <ScrollArea scrollFade className="mt-5 h-auto max-h-96">
         <div className="space-y-5 pr-3">
           {environmentIds.map((environmentId) => (
@@ -756,15 +761,13 @@ function AgentCard({
 }) {
   const meta = getDriverOption(ProviderDriverKind.make(driver));
   const Icon = meta?.icon;
-  const displayName = driver === "claudeAgent" ? "Claude Code" : (meta?.label ?? driver);
+  const displayName = meta?.label ?? driver;
   const summary = getProviderSummary(provider);
   const providerState = getOnboardingProviderState(provider);
 
   return (
     <div className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5">
-      {Icon ? (
-        <Icon className={cn("size-5 shrink-0", driver !== "claudeAgent" && "fill-foreground")} />
-      ) : null}
+      {Icon ? <Icon className="size-5 shrink-0" /> : null}
       <div className="min-w-0 flex-1">
         <span className="block text-sm font-medium text-foreground">{displayName}</span>
         <p className="mt-0.5 text-xs leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">

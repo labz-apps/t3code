@@ -43,7 +43,16 @@ export interface ProviderClientDefinition {
   readonly badgeLabel?: string;
 }
 
-const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
+const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
+
+/**
+ * Client metadata for every driver kind T3 knows how to describe. This is a
+ * *description* table, not the list of drivers this build offers — so it stays
+ * complete. A `ProviderInstance` reaches Settings straight from persisted
+ * settings, and rendering one must never depend on whether we still ship its
+ * driver; the same table also backs icon and label lookup for fork drivers.
+ */
+export const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
   {
     value: ProviderDriverKind.make("codex"),
     label: "Codex",
@@ -71,7 +80,7 @@ const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
     settingsSchema: GrokSettings,
   },
   {
-    value: ProviderDriverKind.make("opencode"),
+    value: OPENCODE_DRIVER_KIND,
     label: "OpenCode",
     icon: OpenCodeIcon,
     settingsSchema: OpenCodeSettings,
@@ -90,7 +99,17 @@ const PROVIDER_CLIENT_DEFINITION_BY_VALUE: Partial<
   PROVIDER_CLIENT_DEFINITIONS.map((definition) => [definition.value, definition]),
 );
 
-export const DRIVER_OPTIONS = PROVIDER_CLIENT_DEFINITIONS;
+/**
+ * Drivers the "add a provider" wizard offers. Mirrors `BUILT_IN_DRIVERS` on the
+ * server, which ships OpenCode alone — offering a driver here that the server
+ * cannot instantiate would produce an instance that only ever renders as
+ * unavailable.
+ */
+const OFFERED_DRIVER_KINDS: ReadonlySet<ProviderDriverKind> = new Set([OPENCODE_DRIVER_KIND]);
+
+export const DRIVER_OPTIONS = PROVIDER_CLIENT_DEFINITIONS.filter((definition) =>
+  OFFERED_DRIVER_KINDS.has(definition.value),
+);
 export const DRIVER_OPTION_BY_VALUE = PROVIDER_CLIENT_DEFINITION_BY_VALUE;
 export type DriverOption = ProviderClientDefinition;
 

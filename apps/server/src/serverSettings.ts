@@ -323,10 +323,11 @@ function restoreUsedProviders(
         ...settings.providers.grok,
         enabled: persisted.providers?.grok?.enabled ?? usedProviders.has("grok"),
       },
-      opencode: {
-        ...settings.providers.opencode,
-        enabled: persisted.providers?.opencode?.enabled ?? usedProviders.has("opencode"),
-      },
+      // OpenCode is deliberately absent: it is the only driver this build
+      // offers and defaults to enabled, so deriving its state from provider
+      // history would switch it off on every fresh install. Its `enabled` is
+      // persisted normally now, which is what lets a user turn it off and
+      // have that stick.
     },
     providerInstances,
   };
@@ -373,14 +374,16 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "pullRequestMergeMethod",
 ]);
 
-// Preserve both enabled states because provider history cannot recover a new opt-in.
+// Cursor and Grok are opt-in, and provider history cannot recover a new opt-in,
+// so their enabled state is persisted even when it matches the default.
+// OpenCode is not listed: it defaults to enabled and is persisted normally, so
+// an explicit "off" from the user survives a restart.
 const PERSISTED_SERVER_SETTINGS_DEFAULTS = {
   ...DEFAULT_SERVER_SETTINGS,
   providers: {
     ...DEFAULT_SERVER_SETTINGS.providers,
     cursor: { ...DEFAULT_SERVER_SETTINGS.providers.cursor, enabled: undefined },
     grok: { ...DEFAULT_SERVER_SETTINGS.providers.grok, enabled: undefined },
-    opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: undefined },
   },
 };
 

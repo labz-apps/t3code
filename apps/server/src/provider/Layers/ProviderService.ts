@@ -15,6 +15,7 @@ import {
   ModelSelection,
   NonNegativeInt,
   ProviderInterruptTurnInput,
+  ProviderRejectUserInputInput,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   RuntimeRequestId,
@@ -40,6 +41,7 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -1984,7 +1986,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.thread_id": input.threadId,
           "provider.request_id": input.requestId,
         });
-        yield* routed.adapter.respondToRequest(routed.threadId, input.requestId, input.decision);
+        yield* routed.adapter.respondToRequest(
+          routed.threadId,
+          input.requestId,
+          input.decision,
+          input.reason,
+        );
         yield* analytics.record("provider.request.responded", {
           provider: routed.adapter.provider,
           decision: input.decision,
@@ -2034,6 +2041,47 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         outcomeAttributes: () =>
           providerMetricAttributes(metricProvider, {
             operation: "user-input-response",
+          }),
+      }),
+    );
+  });
+
+  const rejectUserInput: NonNullable<ProviderServiceMethod<"rejectUserInput">> = Effect.fn(
+    "rejectUserInput",
+  )(function* (rawInput) {
+    const input = yield* decodeInputOrValidationError({
+      operation: "ProviderService.rejectUserInput",
+      schema: ProviderRejectUserInputInput,
+      payload: rawInput,
+    });
+    let metricProvider = "unknown";
+    return yield* Effect.gen(function* () {
+      const routed = yield* resolveRoutableSession({
+        threadId: input.threadId,
+        operation: "ProviderService.rejectUserInput",
+        allowRecovery: true,
+      });
+      metricProvider = routed.adapter.provider;
+      yield* Effect.annotateCurrentSpan({
+        "provider.operation": "reject-user-input",
+        "provider.kind": routed.adapter.provider,
+        "provider.thread_id": input.threadId,
+        "provider.request_id": input.requestId,
+      });
+      const reject = routed.adapter.rejectUserInput;
+      if (!reject) {
+        return yield* toValidationError(
+          "ProviderService.rejectUserInput",
+          `Provider '${routed.adapter.provider}' cannot dismiss a pending user-input request.`,
+        );
+      }
+      yield* reject(routed.threadId, input.requestId);
+    }).pipe(
+      withMetrics({
+        counter: providerTurnsTotal,
+        outcomeAttributes: () =>
+          providerMetricAttributes(metricProvider, {
+            operation: "user-input-dismiss",
           }),
       }),
     );
@@ -2100,6 +2148,50 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               operation: "stop",
             }),
         }),
+      );
+    },
+  );
+
+  // Retirement is best-effort by construction: the thread is already gone, so
+  // a failure here orphans a provider-side record but must never surface as a
+  // failed deletion. Log and carry on.
+  const deleteSession: ProviderServiceMethod<"deleteSession"> = Effect.fn("deleteSession")(
+    function* (rawInput) {
+      const input = yield* decodeInputOrValidationError({
+        operation: "ProviderService.deleteSession",
+        schema: ProviderStopSessionInput,
+        payload: rawInput,
+      });
+      yield* Effect.gen(function* () {
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.deleteSession",
+          allowRecovery: false,
+        });
+        if (routed.adapter.deleteSession === undefined) {
+          return;
+        }
+        yield* routed.adapter.deleteSession(routed.threadId).pipe(
+          Effect.tapCause((cause) =>
+            Effect.logWarning("provider session delete failed during thread retirement", {
+              threadId: input.threadId,
+              provider: routed.adapter.provider,
+              cause,
+            }),
+          ),
+          // Swallow: the thread is already deleted, and a provider-side
+          // orphan is a far smaller problem than a noisy failed deletion.
+          Effect.ignore,
+        );
+      }).pipe(
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.logDebug("thread retirement skipped provider session delete", {
+              threadId: input.threadId,
+              cause: Cause.pretty(cause),
+            }),
+        ),
       );
     },
   );
@@ -2421,7 +2513,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     interruptTurn,
     respondToRequest,
     respondToUserInput,
+    rejectUserInput,
     stopSession,
+    deleteSession,
     listSessions,
     getCapabilities,
     getInstanceInfo,

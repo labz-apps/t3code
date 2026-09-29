@@ -139,6 +139,7 @@ type LegacyProviderRuntimeEvent = {
 function makeFakeCodexAdapter(
   provider: ProviderDriverKind = CODEX_DRIVER,
   supportsConversationRollback?: boolean,
+  supportsRejectUserInput?: boolean,
 ) {
   const sessions = new Map<ThreadId, ProviderSession>();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
@@ -219,6 +220,11 @@ function makeFakeCodexAdapter(
     ): Effect.Effect<void, ProviderAdapterError> => Effect.void,
   );
 
+  const rejectUserInput = vi.fn(
+    (_threadId: ThreadId, _requestId: string): Effect.Effect<void, ProviderAdapterError> =>
+      Effect.void,
+  );
+
   const stopSession = vi.fn((threadId: ThreadId): Effect.Effect<void, ProviderAdapterError> =>
     Effect.sync(() => {
       sessions.delete(threadId);
@@ -289,6 +295,8 @@ function makeFakeCodexAdapter(
     interruptTurn,
     respondToRequest,
     respondToUserInput,
+    // Only adapters that can take a question back expose this.
+    ...(supportsRejectUserInput ? { rejectUserInput } : {}),
     stopSession,
     listSessions,
     hasSession,
@@ -326,6 +334,7 @@ function makeFakeCodexAdapter(
     interruptTurn,
     respondToRequest,
     respondToUserInput,
+    rejectUserInput,
     stopSession,
     listSessions,
     hasSession,
@@ -417,11 +426,16 @@ function makeProviderServiceLayer(
   input: {
     readonly directory?: ProviderSessionDirectory.ProviderSessionDirectory["Service"];
     readonly supportsConversationRollback?: boolean;
+    readonly supportsRejectUserInput?: boolean;
     readonly analyticsLayer?: Layer.Layer<AnalyticsService.AnalyticsService>;
     readonly registry?: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"];
   } = {},
 ) {
-  const codex = makeFakeCodexAdapter(CODEX_DRIVER, input.supportsConversationRollback);
+  const codex = makeFakeCodexAdapter(
+    CODEX_DRIVER,
+    input.supportsConversationRollback,
+    input.supportsRejectUserInput,
+  );
   const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
   const cursor = makeFakeCodexAdapter(CURSOR_DRIVER);
   const registry =
@@ -1292,6 +1306,65 @@ unsupportedRollback.layer("ProviderServiceLive unsupported rewind", (it) => {
   );
 });
 
+const undismissibleQuestions = makeProviderServiceLayer();
+undismissibleQuestions.layer("ProviderServiceLive undismissible questions", (it) => {
+  it.effect("reports a provider that cannot abandon a question instead of answering it", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const rejectUserInput = provider.rejectUserInput;
+      if (!rejectUserInput) {
+        throw new Error("ProviderService must expose rejectUserInput");
+      }
+      const threadId = asThreadId("thread-undismissible-question");
+      yield* provider.startSession(threadId, {
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: fixtureCwd("project"),
+        runtimeMode: "approval-required",
+      });
+
+      const error = yield* Effect.flip(
+        rejectUserInput({ threadId, requestId: asRequestId("req-undismissible-1") }),
+      );
+
+      assert.instanceOf(error, ProviderValidationError);
+      assert.include(error.message, "cannot dismiss a pending user-input request");
+      assert.equal(undismissibleQuestions.codex.respondToUserInput.mock.calls.length, 0);
+    }),
+  );
+});
+
+const dismissibleQuestions = makeProviderServiceLayer({ supportsRejectUserInput: true });
+dismissibleQuestions.layer("ProviderServiceLive dismissible questions", (it) => {
+  it.effect("rejects a user-input request through the adapter that owns the question", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-dismissible-question");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: fixtureCwd("project"),
+        runtimeMode: "approval-required",
+      });
+
+      const rejectUserInput = provider.rejectUserInput;
+      if (!rejectUserInput) {
+        throw new Error("ProviderService must expose rejectUserInput");
+      }
+      yield* rejectUserInput({
+        threadId,
+        requestId: asRequestId("req-dismissible-1"),
+      });
+
+      assert.deepEqual(dismissibleQuestions.codex.rejectUserInput.mock.calls, [
+        [threadId, asRequestId("req-dismissible-1")],
+      ]);
+      assert.equal(dismissibleQuestions.codex.respondToUserInput.mock.calls.length, 0);
+    }),
+  );
+});
+
 it.effect(
   "ProviderServiceLive uploads feedback through the adapter that recovered the session",
   () =>
@@ -1759,7 +1832,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
         decision: "accept",
       });
       assert.deepEqual(routing.codex.respondToRequest.mock.calls, [
-        [session.threadId, asRequestId("req-1"), "accept"],
+        // Trailing `reason` is the refusal explanation; absent for an approval.
+        [session.threadId, asRequestId("req-1"), "accept", undefined],
       ]);
 
       yield* provider.respondToUserInput({

@@ -1608,6 +1608,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           requestId: command.requestId,
           decision: command.decision,
+          ...(command.reason !== undefined ? { reason: command.reason } : {}),
           createdAt: command.createdAt,
         },
       };
@@ -1785,36 +1786,61 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: "This question has already been answered.",
         });
       }
-      // Only async questions can be dropped silently. A native callback
-      // question leaves the provider blocked until it gets a reply, so it
-      // still needs an answer or an interrupted turn.
-      if (!Predicate.isObject(request.payload) || request.payload.responseMode !== "message") {
+      // A message-mode question is already asynchronous, so closing it in the UI
+      // is enough. A native one leaves the provider blocked until it gets a
+      // reply, so it is only dismissible when the provider can abandon it — and
+      // then the provider has to be told.
+      const payload = Predicate.isObject(request.payload) ? request.payload : null;
+      const isAsyncQuestion = payload?.responseMode === "message";
+      const isDismissible = payload?.dismissible === true;
+      if (!isAsyncQuestion && !isDismissible) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: "This question needs an answer. Answer it or stop the turn.",
         });
       }
-      return {
+      const resolvedEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        type: "thread.activity-appended",
+        type: "thread.activity-appended" as const,
         payload: {
           threadId: command.threadId,
           activity: {
-            id: EventId.make(`async-dismiss:${command.requestId}`),
+            id: EventId.make(`user-input-dismiss:${command.requestId}`),
             kind: "user-input.resolved",
             summary: "User input dismissed",
-            tone: "info",
+            tone: "info" as const,
             turnId: request.turnId,
             createdAt: command.createdAt,
-            payload: { requestId: command.requestId, responseMode: "message" },
+            payload: {
+              requestId: command.requestId,
+              ...(isAsyncQuestion ? { responseMode: "message" as const } : {}),
+            },
           },
         },
       };
+      if (!isDismissible) return resolvedEvent;
+      return [
+        resolvedEvent,
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.user-input-dismiss-requested" as const,
+          payload: {
+            threadId: command.threadId,
+            requestId: command.requestId,
+            createdAt: command.createdAt,
+          },
+        },
+      ];
     }
 
     case "thread.conversation.revert":

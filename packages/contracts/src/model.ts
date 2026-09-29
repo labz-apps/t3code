@@ -215,6 +215,15 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
 
 // ── Provider display names ────────────────────────────────────────────
 
+/**
+ * Brand labels for driver kinds, keyed on the open `ProviderDriverKind`.
+ *
+ * This is a label table, NOT the list of drivers this build offers — that is
+ * `BUILT_IN_DRIVERS` on the server. Keeping labels for drivers we do not ship
+ * matters because the name is also read off persisted events and fork-provided
+ * drivers: without an entry, `resolveProviderInstanceDisplayName` falls back to
+ * a humanized slug and a user sees "claudeAgent" instead of "Claude".
+ */
 export const PROVIDER_DISPLAY_NAMES: Partial<Record<ProviderDriverKind, string>> = {
   [ProviderDriverKind.make("antigravity")]: "Antigravity",
   [CODEX_DRIVER_KIND]: "Codex",

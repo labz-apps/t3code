@@ -15,9 +15,15 @@ import { getProviderStatusMessage, hasProviderSetup } from "./ProviderStatusBann
 import {
   modelPickerLegacySectionKey,
   modelPickerModelKey,
+  modelPickerModelProviderSectionKey,
   parseModelPickerLegacySectionKey,
   parseModelPickerModelKey,
+  parseModelPickerModelProviderSectionKey,
 } from "./modelPickerKeys";
+import {
+  groupModelsByModelProvider,
+  shouldRenderModelProviderHeaders,
+} from "./modelProviderGroups";
 import { buildModelPickerSearchText, scoreModelPickerSearch } from "./modelPickerSearch";
 import {
   Combobox,
@@ -51,6 +57,7 @@ type ModelPickerItem = {
   slug: string;
   name: string;
   shortName?: string;
+  modelProviderId?: string;
   subProvider?: string;
   badge?: "new";
   instanceId: ProviderInstanceId;
@@ -426,7 +433,11 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     }
     return [...available, ...disabled];
   }, [instanceEntries, isLocked, matchesLockedProvider]);
-  const showSidebar = !isSearching && sidebarInstanceEntries.length > 0;
+  // The rail exists to choose between agents. With one driver shipped there is
+  // nothing to choose, so it only earns its width when favorites or a second
+  // instance are in play — otherwise the model-provider sections are the only
+  // axis the picker needs.
+  const showSidebar = !isSearching && (sidebarInstanceEntries.length > 1 || favorites.length > 0);
   const instanceOrder = useMemo(
     () => instanceEntries.map((entry) => entry.instanceId),
     [instanceEntries],
@@ -673,19 +684,59 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
           .filter((model) => model.isLegacy)
           .map((model) => modelPickerLegacySectionKey(model.instanceId)),
       ),
+      ...new Set(
+        flatModels
+          .filter((model) => model.modelProviderId)
+          .map((model) => modelPickerModelProviderSectionKey(model.modelProviderId!)),
+      ),
     ],
     [flatModels],
   );
+  // One section per upstream model provider (OpenAI, Anthropic, …). With
+  // OpenCode as the only driver this is the axis users actually pick along,
+  // so the list is sectioned by it rather than left as one flat wall of rows
+  // where same-named models from different providers are indistinguishable.
+  const modelProviderGroups = useMemo(
+    () => groupModelsByModelProvider(visibleModels),
+    [visibleModels],
+  );
+  const showModelProviderHeaders = shouldRenderModelProviderHeaders(modelProviderGroups);
   const filteredItemKeys = useMemo((): string[] => {
-    const modelKeys = visibleModels.map((model) =>
-      modelPickerModelKey(model.instanceId, model.slug),
+    const keyByModel = new Map(
+      visibleModels.map(
+        (model) => [model, modelPickerModelKey(model.instanceId, model.slug)] as const,
+      ),
     );
-    if (!legacySection) {
-      return modelKeys;
+    const keys: string[] = [];
+    // Header first, then that provider's rows, so the section boundary is
+    // visible while scrolling rather than only at a collapsed folder.
+    for (const group of modelProviderGroups) {
+      if (showModelProviderHeaders && group.modelProviderId !== "") {
+        keys.push(modelPickerModelProviderSectionKey(group.modelProviderId));
+      }
+      for (const model of group.models) {
+        const key = keyByModel.get(model);
+        if (key !== undefined) {
+          keys.push(key);
+        }
+      }
     }
-    modelKeys.splice(legacySection.currentModels.length, 0, legacySection.key);
-    return modelKeys;
-  }, [legacySection, visibleModels]);
+    if (legacySection) {
+      // Anchor the "Legacy models" header to the first legacy row rather than
+      // to a fixed offset: grouping by model provider reorders the list, so
+      // the current models are no longer a prefix. Falls back to the end when
+      // the legacy rows are collapsed out of `visibleModels` entirely.
+      const firstLegacyKey = legacySection.legacyModels
+        .map((model) => keyByModel.get(model))
+        .find((key) => key !== undefined);
+      if (firstLegacyKey !== undefined) {
+        keys.splice(keys.indexOf(firstLegacyKey), 0, legacySection.key);
+      } else {
+        keys.push(legacySection.key);
+      }
+    }
+    return keys;
+  }, [legacySection, modelProviderGroups, showModelProviderHeaders, visibleModels]);
   const filteredModelByKey = useMemo(
     (): ReadonlyMap<string, ModelPickerItem> =>
       new Map(
@@ -948,6 +999,25 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                   extraData={modelListExtraData}
                   keyExtractor={(modelKey) => modelKey}
                   renderItem={({ item: modelKey, index }) => {
+                    const modelProviderId = parseModelPickerModelProviderSectionKey(modelKey);
+                    if (modelProviderId !== null) {
+                      const group = modelProviderGroups.find(
+                        (candidate) => candidate.modelProviderId === modelProviderId,
+                      );
+                      return (
+                        <div
+                          key={modelKey}
+                          className="flex items-baseline justify-between gap-2 px-2 pt-3 pb-1 first:pt-1"
+                        >
+                          <span className="truncate text-xs font-medium text-muted-foreground">
+                            {group?.label ?? modelProviderId}
+                          </span>
+                          <span className="shrink-0 text-2xs text-muted-foreground/70">
+                            {group?.models.length ?? 0}
+                          </span>
+                        </div>
+                      );
+                    }
                     if (legacySection?.key === modelKey) {
                       return (
                         <ComboboxItem

@@ -90,6 +90,12 @@ An async question can outlive the turn or a server restart. The engine reads tha
 durable activity before resolving it because the in-memory command snapshot omits old activities.
 Do not infer that a request has disappeared merely because it is outside the recent window.
 
+Whether a question can be dropped without an answer is a provider capability, separate from how an
+answer comes back. `user-input.requested` carries `dismissible` for providers that can abandon a
+question — OpenCode, through `question.reject` — and the decider rejects the dismiss command
+without it. A provider that emits a blocking question but forgets the flag strands the agent with
+no way out.
+
 Capabilities must describe what the provider can actually do. Antigravity can capture workspace
 checkpoints but cannot roll back its conversation. The [checkpoint boundary](./overview.md#turn-completion-and-checkpoints)
 therefore rejects revert before touching files. Native permission and question option IDs must

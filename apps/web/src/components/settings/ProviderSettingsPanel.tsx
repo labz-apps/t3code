@@ -84,7 +84,7 @@ import { ExpandableText } from "./ExpandableText";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { UsageProviderSettings } from "./UsageProviderSettings";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
-import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
+import { getDriverOption, PROVIDER_CLIENT_DEFINITIONS } from "./providerDriverMeta";
 import { searchableSetting } from "./settingsSearch";
 import {
   backgroundActivityOverrideSettings,
@@ -129,7 +129,10 @@ function withoutProviderInstanceFavorites(
   return favorites.filter((favorite) => favorite.provider !== instanceId);
 }
 
-const PROVIDER_SETTINGS = DRIVER_OPTIONS.map((definition) => ({
+// Every driver kind we can describe, not just the ones the wizard offers: a
+// user upgrading from a multi-provider install still has those instances in
+// their settings, and Settings has to render (and let them clean up) each one.
+const PROVIDER_SETTINGS = PROVIDER_CLIENT_DEFINITIONS.map((definition) => ({
   provider: definition.value,
 }));
 

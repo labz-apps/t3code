@@ -62,7 +62,9 @@ function deriveInstanceId(driver: ProviderDriverKind, label: string): string {
 }
 
 const INSTANCE_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
-const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
+// OpenCode is the only driver this build offers, so the wizard's preselected
+// driver and its only real radio option are the same thing.
+const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("opencode");
 const DEFAULT_DRIVER_OPTION = DRIVER_OPTIONS[0]!;
 const EMPTY_CONFIG_DRAFT: Record<string, unknown> = {};
 interface ComingSoonDriverOption {

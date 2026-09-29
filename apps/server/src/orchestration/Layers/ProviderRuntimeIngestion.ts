@@ -650,6 +650,7 @@ export function runtimeEventToActivities(
             ...(event.requestId ? { requestId: event.requestId } : {}),
             questions: event.payload.questions,
             ...(event.payload.responseMode ? { responseMode: event.payload.responseMode } : {}),
+            ...(event.payload.dismissible ? { dismissible: true } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

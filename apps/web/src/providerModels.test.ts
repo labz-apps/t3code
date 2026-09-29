@@ -74,4 +74,28 @@ describe("getProviderModelCapabilities", () => {
       optionDescriptors: [],
     });
   });
+
+  it("leaves the opencode plan agent in the agent selector", () => {
+    // The picker's agent select is the one real plan/build surface, so the
+    // option has to survive resolution whether or not plan is the default.
+    const agentCapabilities: ModelCapabilities = {
+      optionDescriptors: [
+        {
+          id: "agent",
+          label: "Agent",
+          type: "select",
+          currentValue: "plan",
+          options: [
+            { id: "build", label: "Build" },
+            { id: "plan", label: "Plan", isDefault: true },
+          ],
+        },
+      ],
+    };
+    const models = [model({ slug: "synthetic-model", capabilities: agentCapabilities })];
+
+    expect(getProviderModelCapabilities(models, "synthetic-model", PROVIDER)).toEqual(
+      agentCapabilities,
+    );
+  });
 });

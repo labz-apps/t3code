@@ -106,6 +106,8 @@ export const ProviderRespondToRequestInput = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,
   decision: ProviderApprovalDecision,
+  /** Why the user refused. Only meaningful for decline/cancel. */
+  reason: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderRespondToRequestInput = typeof ProviderRespondToRequestInput.Type;
 
@@ -116,6 +118,12 @@ export const ProviderRespondToUserInputInput = Schema.Struct({
   attachmentsByQuestionId: Schema.optional(UserInputAttachments),
 });
 export type ProviderRespondToUserInputInput = typeof ProviderRespondToUserInputInput.Type;
+
+export const ProviderRejectUserInputInput = Schema.Struct({
+  threadId: ThreadId,
+  requestId: ApprovalRequestId,
+});
+export type ProviderRejectUserInputInput = typeof ProviderRejectUserInputInput.Type;
 
 export const ProviderUploadFeedbackInput = Schema.Struct({
   threadId: ThreadId,

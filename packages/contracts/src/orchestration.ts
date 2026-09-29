@@ -1372,6 +1372,14 @@ const ThreadApprovalRespondCommand = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,
   decision: ProviderApprovalDecision,
+  /**
+   * Why the user refused, handed back to the model. OpenCode accepts a
+   * `message` on a permission rejection and nothing on an approval, so this is
+   * only set on decline/cancel; blank and whitespace-only mean absent. It lives
+   * on the command rather than a transient call argument because the event log
+   * is the durable record of what the user actually said.
+   */
+  reason: Schema.optional(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
 });
 
@@ -1714,6 +1722,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.turn-interrupt-requested",
   "thread.approval-response-requested",
   "thread.user-input-response-requested",
+  "thread.user-input-dismiss-requested",
   "thread.checkpoint-revert-requested",
   "thread.reverted",
   "thread.session-stop-requested",
@@ -1946,6 +1955,8 @@ export const ThreadApprovalResponseRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,
   decision: ProviderApprovalDecision,
+  /** The user's stated reason for a refusal, when they gave one. */
+  reason: Schema.optional(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
 });
 
@@ -1954,6 +1965,15 @@ const ThreadUserInputResponseRequestedPayload = Schema.Struct({
   requestId: ApprovalRequestId,
   answers: ProviderUserInputAnswers,
   attachmentsByQuestionId: Schema.optional(UserInputAttachments),
+  createdAt: IsoDateTime,
+});
+
+// Emitted only when the pending question blocks the provider, so the reactor can
+// tell it to abandon the request instead of leaving the agent waiting for an
+// answer that is never coming.
+const ThreadUserInputDismissRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  requestId: ApprovalRequestId,
   createdAt: IsoDateTime,
 });
 
@@ -2171,6 +2191,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.user-input-response-requested"),
     payload: ThreadUserInputResponseRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.user-input-dismiss-requested"),
+    payload: ThreadUserInputDismissRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

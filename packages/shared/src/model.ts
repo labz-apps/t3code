@@ -11,7 +11,10 @@ import {
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make("codex");
+// Last-resort driver when a selection names no instance. OpenCode is the only
+// driver this build offers, so a thread whose stored binding predates it must
+// still land on a routable provider.
+const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make("opencode");
 
 export interface SelectableModelOption {
   slug: string;

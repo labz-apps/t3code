@@ -2249,33 +2249,28 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         }),
       );
 
-      // This test intentionally avoids `mockCommandSpawnerLayer` so the real
-      // `probeCodexAppServerProvider` path runs — including the full
-      // `codex app-server` RPC handshake via `CodexClient.layerChildProcess`.
-      // We point `binaryPath` at a name that cannot exist on any machine so
-      // the real `ChildProcessSpawner` deterministically returns ENOENT; the
-      // probe wraps that as `CodexAppServerSpawnError` and
-      // `checkCodexProviderStatus` turns it into the user-visible "not
+      // This test intentionally avoids a mock spawner so the real
+      // `checkOpenCodeProviderStatus` path runs — including a genuine
+      // `ChildProcessSpawner.spawn` of the configured binary. We point
+      // `binaryPath` at a name that cannot exist on any machine so the real
+      // spawner deterministically returns ENOENT; `openCodeRuntime` wraps
+      // that as a `NotFound` platform error and
+      // `checkOpenCodeProviderStatus` turns it into the user-visible "not
       // installed" error snapshot. If the aggregator's `syncLiveSources`
-      // breaks — the `codex_personal`-never-probes bug we are guarding
+      // breaks — the `opencode_personal`-never-probes bug we are guarding
       // against — that snapshot never lands in `getProviders` and the
       // assertions below fail.
-      it.effect("propagates real Codex probe failures to the aggregator at boot", () =>
+      it.effect("propagates real OpenCode probe failures to the aggregator at boot", () =>
         Effect.gen(function* () {
-          const missingBinary = `t3code_codex_missing_`;
+          const missingBinary = `t3code_opencode_missing_`;
           const serverSettings = yield* makeMutableServerSettingsService(
             decodeServerSettings(
               deepMerge(encodedDefaultServerSettings, {
                 providers: {
-                  // Disable every built-in probe that would otherwise spawn
-                  // on the CI host. `enabled: false` short-circuits each
-                  // driver's probe *before* it touches the spawner, so the
-                  // test environment stays isolated from the dev
-                  // machine's PATH.
-                  codex: { enabled: false },
-                  claudeAgent: { enabled: false },
-                  cursor: { enabled: false },
-                  grok: { enabled: false },
+                  // Disable the default instance's probe so it short-circuits
+                  // *before* touching the spawner and the test environment
+                  // stays isolated from the dev machine's PATH. The explicit
+                  // instance below is the one under test.
                   opencode: { enabled: false },
                 },
                 // `providerInstances` keys are branded `ProviderInstanceId`;
@@ -2284,16 +2279,14 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 // accepts + decodes them. Cast the patch to `unknown` so
                 // the `Schema.decodeSync` below does the real validation.
                 providerInstances: {
-                  // Matches the shape the user had in `.t3/dev/settings.json`
-                  // when the bug was reported: a custom enabled Codex instance
+                  // A second, author-named instance of the shipped driver
                   // pointing at a binary the server has to actually spawn.
-                  codex_personal: {
-                    driver: "codex",
-                    displayName: "Codex Personal",
+                  opencode_personal: {
+                    driver: "opencode",
+                    displayName: "OpenCode Personal",
                     enabled: true,
                     config: {
                       binaryPath: missingBinary,
-                      homePath: `/tmp/${missingBinary}_home`,
                     },
                   },
                 } as unknown as ContractServerSettings["providerInstances"],
@@ -2340,40 +2333,42 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             for (
               let attempts = 0;
               attempts < 50 &&
-              providers.find((provider) => provider.instanceId === "codex_personal")?.status !==
+              providers.find((provider) => provider.instanceId === "opencode_personal")?.status !==
                 "error";
               attempts += 1
             ) {
               yield* Effect.yieldNow;
               providers = yield* registry.getProviders;
             }
-            const codexPersonal = providers.find(
-              (provider) => provider.instanceId === "codex_personal",
+            const openCodePersonal = providers.find(
+              (provider) => provider.instanceId === "opencode_personal",
             );
             assert.notStrictEqual(
-              codexPersonal,
+              openCodePersonal,
               undefined,
-              `Expected the aggregator to know about codex_personal; instead saw: ${providers
+              `Expected the aggregator to know about opencode_personal; instead saw: ${providers
                 .map((provider) => provider.instanceId)
                 .join(", ")}`,
             );
             assert.strictEqual(
-              codexPersonal?.status,
+              openCodePersonal?.status,
               "error",
-              "Real Codex probe against a missing binary should surface as 'error' in the aggregator",
+              "Real OpenCode probe against a missing binary should surface as 'error' in the aggregator",
             );
-            assert.strictEqual(codexPersonal?.installed, false);
-            assert.include(codexPersonal?.message, missingBinary);
-            assert.include(codexPersonal?.message, "Settings → Providers → Codex → Binary path");
+            assert.strictEqual(openCodePersonal?.installed, false);
+            assert.strictEqual(
+              openCodePersonal?.message,
+              "OpenCode CLI (`opencode`) is not installed or not on PATH.",
+            );
           }).pipe(Effect.provide(runtimeServices));
         }),
       );
 
-      // A binary path change must rebuild Codex and publish its new probe result.
-      it.effect("re-probes when settings change the codex binaryPath", () =>
+      // A binary path change must rebuild the instance and publish its new probe result.
+      it.effect("re-probes when settings change the opencode binaryPath", () =>
         Effect.gen(function* () {
-          const firstMissing = `t3code_codex_first_`;
-          const secondMissing = `t3code_codex_second_`;
+          const firstMissing = `t3code_opencode_first_`;
+          const secondMissing = `t3code_opencode_second_`;
           const spawnedCommands: Array<string> = [];
           const secondProbeStarted = yield* Deferred.make<void>();
           const releaseSecondProbe = yield* Deferred.make<void>();
@@ -2382,11 +2377,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             decodeServerSettings(
               deepMerge(encodedDefaultServerSettings, {
                 providers: {
-                  codex: { enabled: true, binaryPath: firstMissing },
-                  claudeAgent: { enabled: false },
-                  cursor: { enabled: false },
-                  grok: { enabled: false },
-                  opencode: { enabled: false },
+                  opencode: { enabled: true, binaryPath: firstMissing },
                 },
               }),
             ),
@@ -2444,32 +2435,32 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
 
           yield* Effect.gen(function* () {
             const registry = yield* ProviderRegistry.ProviderRegistry;
-            const codexSnapshots = registry.streamChanges.pipe(
+            const openCodeSnapshots = registry.streamChanges.pipe(
               Stream.map((providers) =>
-                providers.find((provider) => provider.instanceId === "codex"),
+                providers.find((provider) => provider.instanceId === "opencode"),
               ),
               Stream.filter((provider): provider is ServerProvider => provider !== undefined),
             );
             const firstError = yield* Stream.toPull(
-              codexSnapshots.pipe(Stream.filter((provider) => provider.status === "error")),
+              openCodeSnapshots.pipe(Stream.filter((provider) => provider.status === "error")),
             );
-            const currentCodex = (yield* registry.getProviders).find(
-              (provider) => provider.instanceId === "codex",
+            const currentOpenCode = (yield* registry.getProviders).find(
+              (provider) => provider.instanceId === "opencode",
             );
-            const initialCodex =
-              currentCodex?.status === "error" ? currentCodex : (yield* firstError)[0];
-            assert.strictEqual(initialCodex?.status, "error");
-            assert.strictEqual(initialCodex?.installed, false);
+            const initialOpenCode =
+              currentOpenCode?.status === "error" ? currentOpenCode : (yield* firstError)[0];
+            assert.strictEqual(initialOpenCode?.status, "error");
+            assert.strictEqual(initialOpenCode?.installed, false);
             assert.deepStrictEqual(spawnedCommands, [firstMissing]);
 
             const pendingRebuild = yield* Stream.toPull(
-              codexSnapshots.pipe(
+              openCodeSnapshots.pipe(
                 Stream.filter((provider) => provider.status === "warning" && !provider.installed),
               ),
             );
             yield* serverSettings.updateSettings({
               providers: {
-                codex: { enabled: true, binaryPath: secondMissing },
+                opencode: { enabled: true, binaryPath: secondMissing },
               },
             });
             // Start the lazy stream only after publishing. A watcher that did
@@ -2481,35 +2472,40 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             yield* Deferred.await(secondProbeStarted);
             yield* pendingRebuild;
             const rebuiltError = yield* Stream.toPull(
-              codexSnapshots.pipe(Stream.filter((provider) => provider.status === "error")),
+              openCodeSnapshots.pipe(Stream.filter((provider) => provider.status === "error")),
             );
             yield* Deferred.succeed(releaseSecondProbe, undefined);
-            const [reprobedCodex] = yield* rebuiltError;
+            const [reprobedOpenCode] = yield* rebuiltError;
             assert.deepStrictEqual(spawnedCommands, [firstMissing, secondMissing]);
-            assert.strictEqual(reprobedCodex?.status, "error");
-            assert.strictEqual(reprobedCodex?.installed, false);
+            assert.strictEqual(reprobedOpenCode?.status, "error");
+            assert.strictEqual(reprobedOpenCode?.installed, false);
           }).pipe(Effect.provide(runtimeServices));
         }),
       );
 
+      // The registry's "unavailable" bucket is fed by
+      // `ProviderInstanceRegistryLive.buildEntry`, and the aggregator merges it
+      // into the read model via `syncLiveSources`. Entries naming a driver
+      // this build does not ship are filtered out earlier, by
+      // `deriveProviderInstanceConfigMap`, so the only shadow a settings file
+      // can still produce is a *shipped* driver whose config fails to decode
+      // — which is what this fixture builds.
       it.effect("includes unavailable instance snapshots in getProviders", () =>
         Effect.gen(function* () {
           const serverSettings = yield* makeMutableServerSettingsService(
             decodeServerSettings(
               deepMerge(encodedDefaultServerSettings, {
                 providers: {
-                  codex: { enabled: false },
-                  claudeAgent: { enabled: false },
-                  cursor: { enabled: false },
-                  grok: { enabled: false },
                   opencode: { enabled: false },
                 },
                 providerInstances: {
-                  ghost_main: {
-                    driver: "ghostDriver",
-                    displayName: "A fork-only driver we don't ship",
-                    enabled: false,
-                    config: { arbitrary: "payload" },
+                  broken_opencode: {
+                    driver: "opencode",
+                    displayName: "OpenCode with a config this build cannot decode",
+                    enabled: true,
+                    // `binaryPath` decodes as a trimmed string, so a number
+                    // fails `OpenCodeSettings` in the registry's decoder.
+                    config: { binaryPath: 42 },
                   },
                 } as unknown as ContractServerSettings["providerInstances"],
               }),
@@ -2548,114 +2544,100 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           yield* Effect.gen(function* () {
             const registry = yield* ProviderRegistry.ProviderRegistry;
             const providers = yield* registry.getProviders;
-            const ghost = providers.find((provider) => provider.instanceId === "ghost_main");
+            const broken = providers.find((provider) => provider.instanceId === "broken_opencode");
 
-            assert.notStrictEqual(ghost, undefined);
-            assert.strictEqual(ghost?.driver, "ghostDriver");
-            assert.strictEqual(ghost?.availability, "unavailable");
-            assert.match(ghost?.unavailableReason ?? "", /ghostDriver/);
+            assert.notStrictEqual(broken, undefined);
+            assert.strictEqual(broken?.driver, "opencode");
+            assert.strictEqual(broken?.availability, "unavailable");
+            assert.match(
+              broken?.unavailableReason ?? "",
+              /Invalid config for instance 'broken_opencode'/,
+            );
           }).pipe(Effect.provide(runtimeServices));
         }),
       );
 
-      it.effect(
-        "keeps Cursor disabled and skips provider probing when settings use their defaults",
-        () =>
-          Effect.gen(function* () {
-            const serverSettings = yield* makeMutableServerSettingsService(
-              decodeServerSettings(
-                deepMerge(encodedDefaultServerSettings, {
-                  providers: {
-                    codex: {
-                      enabled: false,
-                    },
-                    grok: {
-                      enabled: false,
-                    },
+      // The disabled-provider contract: a disabled instance is still surfaced
+      // (so the user can see and re-enable it), reports `status: "disabled"`
+      // with the driver's own copy, and its probe short-circuits before it
+      // ever reaches the spawner. OpenCode is the only driver this build
+      // ships, so it is also the only instance the aggregator can know about
+      // — and it defaults to `enabled: true`, so the fixture has to disable
+      // it explicitly. The unresolvable `binaryPath` keeps the update-advisory
+      // resolver off the real filesystem lookup, so "no spawn at all" holds
+      // regardless of what the host machine has installed.
+      it.effect("keeps a disabled OpenCode instance disabled and skips provider probing", () =>
+        Effect.gen(function* () {
+          const serverSettings = yield* makeMutableServerSettingsService(
+            decodeServerSettings(
+              deepMerge(encodedDefaultServerSettings, {
+                providers: {
+                  opencode: {
+                    enabled: false,
+                    binaryPath: "t3code_opencode_disabled_",
                   },
-                }),
+                },
+              }),
+            ),
+          );
+          const spawnedCommands: Array<string> = [];
+          const scope = yield* Scope.make();
+          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+          const providerRegistryLayer = ProviderRegistryLive.pipe(
+            Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+            Layer.provideMerge(AntigravityInstallation.layer),
+            Layer.provideMerge(
+              Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
+            ),
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), {
+                prefix: "t3-provider-registry-",
+              }),
+            ),
+            Layer.provideMerge(TestHttpClientLive),
+            Layer.provideMerge(
+              Layer.succeed(
+                ProviderEventLoggers.ProviderEventLoggers,
+                ProviderEventLoggers.NoOpProviderEventLoggers,
               ),
-            );
-            let cursorSpawned = false;
-            const scope = yield* Scope.make();
-            yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-            const providerRegistryLayer = ProviderRegistryLive.pipe(
-              Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
-              Layer.provideMerge(AntigravityInstallation.layer),
-              Layer.provideMerge(
-                Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
-              ),
-              Layer.provideMerge(
-                ServerConfig.layerTest(process.cwd(), {
-                  prefix: "t3-provider-registry-",
-                }),
-              ),
-              Layer.provideMerge(TestHttpClientLive),
-              Layer.provideMerge(
-                Layer.succeed(
-                  ProviderEventLoggers.ProviderEventLoggers,
-                  ProviderEventLoggers.NoOpProviderEventLoggers,
-                ),
-              ),
-              Layer.provideMerge(ModelManifest.layerTest),
-              Layer.provideMerge(ResetCreditCoordinator.layerTest),
-              Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
-              Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
-              Layer.provideMerge(
-                mockCommandSpawnerLayer((command, args) => {
-                  if (command === "cursor-agent") {
-                    cursorSpawned = true;
-                  }
-                  const joined = args.join(" ");
-                  if (joined === "--version") {
-                    return {
-                      stdout: `${command} 1.0.0\n`,
-                      stderr: "",
-                      code: 0,
-                    };
-                  }
-                  if (joined === "auth status") {
-                    return {
-                      stdout: '{"authenticated":true}\n',
-                      stderr: "",
-                      code: 0,
-                    };
-                  }
-                  throw new Error(`Unexpected args: ${command} ${joined}`);
-                }),
-              ),
-            );
-            const runtimeServices = yield* Layer.build(
-              Layer.mergeAll(
-                Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
-                providerRegistryLayer,
-              ),
-            ).pipe(Scope.provide(scope));
+            ),
+            Layer.provideMerge(ModelManifest.layerTest),
+            Layer.provideMerge(ResetCreditCoordinator.layerTest),
+            Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
+            Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
+            Layer.provideMerge(
+              mockCommandSpawnerLayer((command, args) => {
+                spawnedCommands.push([command, ...args].join(" "));
+                return { stdout: "", stderr: "", code: 0 };
+              }),
+            ),
+          );
+          const runtimeServices = yield* Layer.build(
+            Layer.mergeAll(
+              Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
+              providerRegistryLayer,
+            ),
+          ).pipe(Scope.provide(scope));
 
-            yield* Effect.gen(function* () {
-              const registry = yield* ProviderRegistry.ProviderRegistry;
-              const providers = yield* registry.getProviders;
-              const cursorProvider = providers.find(
-                (provider) => provider.instanceId === ProviderInstanceId.make("cursor"),
-              );
+          yield* Effect.gen(function* () {
+            const registry = yield* ProviderRegistry.ProviderRegistry;
+            const providers = yield* registry.getProviders;
+            const openCodeProvider = providers.find(
+              (provider) => provider.instanceId === ProviderInstanceId.make("opencode"),
+            );
 
-              assert.deepStrictEqual(providers.map((provider) => provider.instanceId).toSorted(), [
-                "antigravity",
-                "claudeAgent",
-                "codex",
-                "cursor",
-                "grok",
-                "opencode",
-              ]);
-              assert.strictEqual(cursorProvider?.enabled, false);
-              assert.strictEqual(cursorProvider?.status, "disabled");
-              assert.strictEqual(
-                cursorProvider?.message,
-                "Cursor is disabled in T3 Code settings.",
-              );
-              assert.strictEqual(cursorSpawned, false);
-            }).pipe(Effect.provide(runtimeServices));
-          }),
+            assert.deepStrictEqual(providers.map((provider) => provider.instanceId).toSorted(), [
+              "opencode",
+            ]);
+            assert.strictEqual(openCodeProvider?.enabled, false);
+            assert.strictEqual(openCodeProvider?.status, "disabled");
+            assert.strictEqual(
+              openCodeProvider?.message,
+              "OpenCode is disabled in T3 Code settings.",
+            );
+            assert.deepStrictEqual(spawnedCommands, []);
+          }).pipe(Effect.provide(runtimeServices));
+        }),
       );
 
       it.effect("skips codex probes entirely when the provider is disabled", () =>

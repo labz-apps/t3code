@@ -594,7 +594,14 @@ export function resolveComposerProviderSelection(input: {
   };
 }
 
-/** Keep restored drafts and every plan control on the selected instance's supported mode. */
+/**
+ * Keep restored drafts and every plan control on the selected instance's
+ * supported mode. The model picker's agent select is the real plan/build
+ * surface — OpenCode's own `plan` and `build` agents reach the turn through the
+ * model options — so a provider that reports `showInteractionModeToggle: false`
+ * (OpenCode) must never resolve a draft to `plan` here and dispatch a second,
+ * contradicting signal on the same turn.
+ */
 export function resolveComposerInteractionMode(input: {
   planModeEnabled: boolean;
   provider: Pick<ServerProvider, "showInteractionModeToggle"> | null | undefined;

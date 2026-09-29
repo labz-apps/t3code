@@ -72,4 +72,43 @@ describe("runtime diagnostics in the work log", () => {
 
     expect(entry?.detail).toBeUndefined();
   });
+
+  it("carries a provider's recovery link onto the warning row", () => {
+    const [entry] = deriveWorkLogEntries([
+      makeActivity({
+        kind: "runtime.warning",
+        tone: "info",
+        summary: "Model is out of credit",
+        payload: { link: "https://opencode.ai/billing" },
+      }),
+    ]);
+
+    expect(entry?.recoveryLink).toBe("https://opencode.ai/billing");
+  });
+
+  it("does not offer a recovery link the user could not follow safely", () => {
+    const [entry] = deriveWorkLogEntries([
+      makeActivity({
+        kind: "runtime.warning",
+        tone: "info",
+        summary: "Model is out of credit",
+        payload: { link: "javascript:alert(1)" },
+      }),
+    ]);
+
+    expect(entry?.recoveryLink).toBeUndefined();
+  });
+
+  it("ignores a link on an activity that is not a runtime warning", () => {
+    const [entry] = deriveWorkLogEntries([
+      makeActivity({
+        kind: "tool.completed",
+        tone: "tool",
+        summary: "Read file",
+        payload: { link: "https://opencode.ai/billing" },
+      }),
+    ]);
+
+    expect(entry?.recoveryLink).toBeUndefined();
+  });
 });

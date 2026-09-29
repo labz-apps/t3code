@@ -645,7 +645,9 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.isTrue(settings.providerInstances[ProviderInstanceId.make("opencode_work")]?.enabled);
       const unused = settings.providerInstances[ProviderInstanceId.make("opencode_unused")];
       assert.isDefined(unused);
-      assert.isFalse(resolveProviderInstanceEnabled(unused));
+      // OpenCode defaults to enabled, so an instance with no flag and no
+      // history is usable. Only the opt-in drivers need history to turn on.
+      assert.isTrue(resolveProviderInstanceEnabled(unused));
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
@@ -665,6 +667,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const settings = yield* serverSettings.getSettings;
 
       assert.isFalse(settings.providers.grok.enabled);
+      // An explicit `false` on disk is the user's decision and must survive,
+      // even though the default is now `true`.
       assert.isFalse(settings.providers.opencode.enabled);
       assert.isFalse(settings.providers.cursor.enabled);
       assert.isFalse(settings.providerInstances[ProviderInstanceId.make("grok")]?.enabled);
@@ -701,7 +705,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const settings = yield* serverSettings.getSettings;
 
       assert.isFalse(settings.providers.grok.enabled);
-      assert.isFalse(settings.providers.opencode.enabled);
+      assert.isTrue(settings.providers.opencode.enabled);
       assert.isFalse(settings.providers.cursor.enabled);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
@@ -714,7 +718,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const settings = yield* serverSettings.getSettings;
 
       assert.isTrue(settings.providers.grok.enabled);
-      assert.isFalse(settings.providers.opencode.enabled);
+      assert.isTrue(settings.providers.opencode.enabled);
       assert.isFalse(settings.providers.cursor.enabled);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
@@ -731,7 +735,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       assert.isTrue(settings.providers.cursor.enabled);
       assert.isFalse(settings.providers.grok.enabled);
-      assert.isFalse(settings.providers.opencode.enabled);
+      assert.isTrue(settings.providers.opencode.enabled);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
@@ -750,7 +754,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       assert.isFalse(settings.providers.cursor.enabled);
       assert.isTrue(settings.providers.grok.enabled);
-      assert.isFalse(settings.providers.opencode.enabled);
+      assert.isTrue(settings.providers.opencode.enabled);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
@@ -811,11 +815,13 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const fileSystem = yield* FileSystem.FileSystem;
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
 
+      // Cursor and Grok only. OpenCode defaults to enabled, so writing
+      // `enabled: true` matches the default and is stripped like any other
+      // default-valued field.
       yield* serverSettings.updateSettings({
         providers: {
           cursor: { enabled: true },
           grok: { enabled: true },
-          opencode: { enabled: true },
         },
       });
       yield* serverSettings.updateSettings({ addProjectBaseDirectory: "~/Development" });
@@ -825,45 +831,66 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const persisted = JSON.parse(raw);
       assert.isTrue(persisted.providers.cursor.enabled);
       assert.isTrue(persisted.providers.grok.enabled);
-      assert.isTrue(persisted.providers.opencode.enabled);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
-  it.effect("keeps optional providers disabled after a new installation writes settings", () =>
+  it.effect(
+    "keeps opt-in providers disabled and OpenCode enabled after a new install writes settings",
+    () =>
+      Effect.gen(function* () {
+        const serverConfig = yield* ServerConfig.ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+
+        const initial = yield* serverSettings.getSettings;
+        assert.isFalse(initial.providers.grok.enabled);
+        assert.isTrue(initial.providers.opencode.enabled);
+        assert.isFalse(initial.providers.cursor.enabled);
+
+        const next = yield* serverSettings.updateSettings({
+          addProjectBaseDirectory: "~/Development",
+          providerInstances: {
+            [ProviderInstanceId.make("grok")]: {
+              driver: ProviderDriverKind.make("grok"),
+              config: {},
+            },
+          },
+        });
+
+        assert.isFalse(next.providers.grok.enabled);
+        assert.isTrue(next.providers.opencode.enabled);
+        assert.isFalse(next.providers.cursor.enabled);
+        const grok = next.providerInstances[ProviderInstanceId.make("grok")];
+        assert.isDefined(grok);
+        assert.isFalse(resolveProviderInstanceEnabled(grok));
+
+        const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        const persisted = JSON.parse(raw);
+        assert.isFalse(persisted.providers.cursor.enabled);
+        assert.isFalse(persisted.providers.grok.enabled);
+        assert.isUndefined(persisted.providerInstances.grok.enabled);
+        // Enabled matches the default, so nothing is written. Crucially it is
+        // never written as `false` — that would switch the only driver off on
+        // the next load.
+        assert.isUndefined(persisted.providers?.opencode?.enabled);
+      }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("persists an explicit OpenCode disable and restores it on load", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
 
-      const initial = yield* serverSettings.getSettings;
-      assert.isFalse(initial.providers.grok.enabled);
-      assert.isFalse(initial.providers.opencode.enabled);
-      assert.isFalse(initial.providers.cursor.enabled);
-
-      const next = yield* serverSettings.updateSettings({
-        addProjectBaseDirectory: "~/Development",
-        providerInstances: {
-          [ProviderInstanceId.make("grok")]: {
-            driver: ProviderDriverKind.make("grok"),
-            config: {},
-          },
-        },
-      });
-
-      assert.isFalse(next.providers.grok.enabled);
-      assert.isFalse(next.providers.opencode.enabled);
-      assert.isFalse(next.providers.cursor.enabled);
-      const grok = next.providerInstances[ProviderInstanceId.make("grok")];
-      assert.isDefined(grok);
-      assert.isFalse(resolveProviderInstanceEnabled(grok));
+      // The mirror of the test above: `false` differs from the default, so it
+      // has to survive the write or the user could never turn OpenCode off.
+      yield* serverSettings.updateSettings({ providers: { opencode: { enabled: false } } });
 
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
       // @effect-diagnostics-next-line preferSchemaOverJson:off
-      const persisted = JSON.parse(raw);
-      assert.isFalse(persisted.providers.cursor.enabled);
-      assert.isFalse(persisted.providers.grok.enabled);
-      assert.isFalse(persisted.providers.opencode.enabled);
-      assert.isUndefined(persisted.providerInstances.grok.enabled);
+      assert.isFalse(JSON.parse(raw).providers.opencode.enabled);
+      assert.isFalse((yield* serverSettings.getSettings).providers.opencode.enabled);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
@@ -964,8 +991,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         autoCompactWindow: "",
       });
       assert.deepEqual(next.providers.opencode, {
-        // OpenCode is disabled by default; this update only touches paths.
-        enabled: false,
+        // OpenCode is enabled by default; this update only touches paths.
+        enabled: true,
         binaryPath: "/opt/homebrew/bin/opencode",
         serverUrl: "http://127.0.0.1:4096",
         serverPassword: "secret-password",
@@ -1060,7 +1087,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
             enabled: false,
           },
           opencode: {
-            enabled: false,
+            // No `enabled` key: it matches the default, so it is not
+            // written. Only the opt-in providers carry an explicit `false`.
             serverUrl: "http://127.0.0.1:4096",
             serverPassword: "secret-password",
           },
@@ -1420,16 +1448,18 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const serverConfig = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const instanceId = ProviderInstanceId.make("codex_terminal");
+      // OpenCode, not Codex: the registry only materializes instances for
+      // drivers this build ships, so a Codex instance no longer exists.
+      const instanceId = ProviderInstanceId.make("opencode_terminal");
 
       yield* serverSettings.updateSettings({
         providerInstances: {
           [instanceId]: {
-            driver: ProviderDriverKind.make("codex"),
+            driver: ProviderDriverKind.make("opencode"),
             environment: [
               { name: "OPENROUTER_API_KEY", value: "sk-terminal-secret", sensitive: true },
             ],
-            config: { homePath: "~/.codex-terminal" },
+            config: {},
           },
         },
       });
@@ -1443,7 +1473,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const persisted = yield* fileSystem.readFileString(serverConfig.settingsPath);
 
       assert.equal(environment.OPENROUTER_API_KEY, "sk-terminal-secret");
-      assert.match(environment.CODEX_HOME ?? "", /[\\/][.]codex-terminal$/);
+      assert.isUndefined(environment.CODEX_HOME);
       assert.notInclude(persisted, "sk-terminal-secret");
       assert.include(persisted, '"valueRedacted": true');
     }).pipe(Effect.provide(makeServerSettingsLayer())),

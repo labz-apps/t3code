@@ -7793,7 +7793,6 @@ export default function ChatView(props: ChatViewProps) {
         models: provider.models,
         modelOptions: selection.options,
         promptInjectionState: getComposerPromptInjectionState(messageTextForSend),
-        planModeEnabled: settings.planModeEnabled,
       });
       const text = formatOutgoingPrompt({
         provider: provider.driverKind,
@@ -8615,7 +8614,7 @@ export default function ChatView(props: ChatViewProps) {
   restoreQueuedMessagesRef.current = restoreQueuedMessagesToComposer;
 
   const onRespondToApproval = useCallback(
-    async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
+    async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision, reason?: string) => {
       if (!activeThreadId) return;
 
       setRespondingRequestIds((existing) =>
@@ -8627,6 +8626,9 @@ export default function ChatView(props: ChatViewProps) {
           threadId: activeThreadId,
           requestId,
           decision,
+          // Only a refusal carries a reason, and only a non-blank one: the
+          // contract trims and rejects empty, so there is nothing to send.
+          ...(reason ? { reason } : {}),
         },
       });
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {

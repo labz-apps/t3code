@@ -30,17 +30,12 @@ const mergeProviderModels = (
 };
 
 /**
- * Built-in drivers in presentation order. Codex and Claude lead, the opt-in
- * providers follow, and unknown or fork drivers sort after every built-in.
+ * Built-in drivers in presentation order, and unknown or fork drivers sort
+ * after every built-in. OpenCode is the only driver this build ships, so
+ * this list exists to keep its instances ahead of any stale row still sitting
+ * in an on-disk status cache.
  */
-const BUILT_IN_DRIVER_ORDER: ReadonlyArray<string> = [
-  "codex",
-  "claudeAgent",
-  "cursor",
-  "grok",
-  "opencode",
-  "antigravity",
-];
+const BUILT_IN_DRIVER_ORDER: ReadonlyArray<string> = ["opencode"];
 
 const driverRank = (driver: string): number => {
   const index = BUILT_IN_DRIVER_ORDER.indexOf(driver);

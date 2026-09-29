@@ -1037,7 +1037,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         case "thread.proposed-plan-upserted":
         case "thread.activity-appended":
         case "thread.approval-response-requested":
-        case "thread.user-input-response-requested": {
+        case "thread.user-input-response-requested":
+        case "thread.user-input-dismiss-requested": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });

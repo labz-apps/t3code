@@ -115,6 +115,7 @@ import {
   ChevronUpIcon,
   CircleAlertIcon,
   DownloadIcon,
+  ExternalLinkIcon,
   EyeIcon,
   GlobeIcon,
   HammerIcon,
@@ -137,6 +138,8 @@ import type {
   KnownComposerContextRecord,
 } from "@t3tools/contracts";
 import { Button } from "../ui/button";
+import { useOpenLink } from "../../browser/useOpenLink";
+import { runtimeWarningRecoveryLabel } from "../../runtimeWarningRecovery.logic";
 import type { QueuedComposerMessage } from "../../queuedMessageStore";
 import { useAssetUrlRefresh, useAssetUrls, useAssetUrlState } from "../../assets/assetUrls";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
@@ -4734,6 +4737,8 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   const { workEntry, workspaceRoot, isExpandedToolGroupEntry, displayLabel } = props;
   const { threadRef, onImageExpand, timestampFormat } = use(TimelineRowCtx);
   const groupView = use(WorkGroupViewCtx);
+  const openLink = useOpenLink(threadRef);
+  const recoveryLink = workEntry.recoveryLink ?? null;
   const [expanded, setExpanded] = useState(
     () => groupView?.state.expandedEntries.has(workEntry.id) ?? false,
   );
@@ -4907,6 +4912,21 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
           </span>
         </div>
       </div>
+      {recoveryLink ? (
+        <div className="mt-0.5 ms-7" onClick={stopRowToggle} onPointerDown={stopRowToggle}>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button size="xs" variant="link" onClick={() => void openLink(recoveryLink)}>
+                  <ExternalLinkIcon aria-hidden className="size-3" />
+                  {runtimeWarningRecoveryLabel(recoveryLink)}
+                </Button>
+              }
+            />
+            <TooltipPopup side="top">{recoveryLink}</TooltipPopup>
+          </Tooltip>
+        </div>
+      ) : null}
       {expanded && viewedImage && threadRef ? (
         <div
           className="mt-1 ms-7 cursor-default"

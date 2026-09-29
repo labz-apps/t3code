@@ -26,6 +26,7 @@ import { Badge } from "../ui/badge";
 import { Command, CommandGroup, CommandItem, CommandList } from "../ui/command";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { ComposerBanner } from "./ComposerBanner";
+import { resolveProviderSlashCommandHints } from "./composerSlashCommandHints.logic";
 import { resolvePullRequestState } from "../pullRequest/pullRequestPresentation";
 
 export type ComposerCommandItem =
@@ -154,6 +155,11 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
     props.item.type === "skill" ? resolveProviderSkillSourceKind(props.item.skill) : null;
   const isSlashSkill =
     props.triggerKind === "slash-command" && props.item.type === "skill" ? props.item.skill : null;
+  const commandHints =
+    props.item.type === "provider-slash-command"
+      ? resolveProviderSlashCommandHints(props.item.command)
+      : null;
+  const commandHintText = commandHints?.map((hint) => hint.label).join(" · ") ?? "";
   const pullRequestPresentation =
     props.item.type === "pull-request" ? resolvePullRequestState(props.item.pullRequest) : null;
 
@@ -205,6 +211,12 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
             kind={skillSourceKind}
             showSkillSuffix={props.triggerKind === "skill"}
           />
+        ) : commandHintText ? (
+          // Dim text, not a chip: a command that pins a model or runs as a
+          // subtask is worth saying out loud, but not worth a badge on every row.
+          <span className="ms-auto min-w-0 shrink truncate text-2xs text-muted-foreground/70">
+            {commandHintText}
+          </span>
         ) : null}
       </span>
     </CommandItem>

@@ -70,6 +70,15 @@ export const ServerProviderModel = Schema.Struct({
   slug: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
   shortName: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * Upstream model provider this model is served by, e.g. `openai` or
+   * `anthropic`. Distinct from the T3-level provider/instance: with OpenCode
+   * as the only agent, the model provider is what the user actually picks
+   * between. Optional because a driver's slug need not be namespaced — only
+   * OpenCode reports one. `subProvider` is the untyped display name and stays
+   * presentation-only; group and filter on this field instead.
+   */
+  modelProviderId: Schema.optional(TrimmedNonEmptyString),
   subProvider: Schema.optional(TrimmedNonEmptyString),
   aliases: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   badge: Schema.optional(Schema.Literal("new")),
@@ -85,10 +94,32 @@ export const ServerProviderSlashCommandInput = Schema.Struct({
 });
 export type ServerProviderSlashCommandInput = typeof ServerProviderSlashCommandInput.Type;
 
+/**
+ * Where a slash command came from. OpenCode reports its own commands, MCP
+ * server prompts, and skill-backed commands on one list. The composer uses
+ * this to label a command that pins a model or runs as a subtask differently
+ * from a plain prompt, and to decide whether `$name` is the better affordance.
+ * `"unknown"` covers a driver that does not report a source.
+ */
+export const ServerProviderSlashCommandSource = Schema.Literals([
+  "command",
+  "mcp",
+  "skill",
+  "unknown",
+]);
+export type ServerProviderSlashCommandSource = typeof ServerProviderSlashCommandSource.Type;
+
 export const ServerProviderSlashCommand = Schema.Struct({
   name: TrimmedNonEmptyString,
   description: Schema.optional(TrimmedNonEmptyString),
   input: Schema.optional(ServerProviderSlashCommandInput),
+  source: Schema.optional(ServerProviderSlashCommandSource),
+  /** Agent the command forces, when it pins one. */
+  agent: Schema.optional(TrimmedNonEmptyString),
+  /** Model the command forces, when it pins one. */
+  model: Schema.optional(TrimmedNonEmptyString),
+  /** True when the command runs as a subtask rather than in the main session. */
+  subtask: Schema.optional(Schema.Boolean),
 });
 export type ServerProviderSlashCommand = typeof ServerProviderSlashCommand.Type;
 

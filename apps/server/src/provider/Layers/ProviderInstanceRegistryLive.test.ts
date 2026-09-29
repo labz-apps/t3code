@@ -9,12 +9,15 @@
  *     multi-codex capability the refactor exists to unlock.
  *
  *  2. **Many drivers, one registry** — the "all drivers slice" describe
- *     block below configures one instance of every shipped driver
+ *     block below configures one instance of every known driver
  *     (`codex`, `claudeAgent`, `cursor`, `grok`, `opencode`) in a single
  *     `ProviderInstanceConfigMap` and asserts the registry boots them all
  *     without cross-contamination. This proves the driver SPI is uniform
  *     across every provider — any driver plugs into the registry through
- *     the same `ProviderDriver` value contract.
+ *     the same `ProviderDriver` value contract. It registers the drivers
+ *     itself rather than reading `BUILT_IN_DRIVERS` on purpose: the build
+ *     ships OpenCode alone, and the registry must not drift toward whichever
+ *     drivers happen to be listed there.
  *
  * Every instance in these tests is configured with `enabled: false` so the
  * provider-status checks short-circuit to pending/disabled snapshots
@@ -44,16 +47,15 @@ import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
-import type { BuiltInDriversEnv } from "../builtInDrivers.ts";
 import { AntigravityInstallation } from "../AntigravityInstallation.ts";
 import { ServerConfig } from "../../config.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
-import { ClaudeDriver } from "../Drivers/ClaudeDriver.ts";
-import { CodexDriver } from "../Drivers/CodexDriver.ts";
-import { CursorDriver } from "../Drivers/CursorDriver.ts";
-import { GrokDriver } from "../Drivers/GrokDriver.ts";
-import { OpenCodeDriver } from "../Drivers/OpenCodeDriver.ts";
+import { ClaudeDriver, type ClaudeDriverEnv } from "../Drivers/ClaudeDriver.ts";
+import { CodexDriver, type CodexDriverEnv } from "../Drivers/CodexDriver.ts";
+import { CursorDriver, type CursorDriverEnv } from "../Drivers/CursorDriver.ts";
+import { GrokDriver, type GrokDriverEnv } from "../Drivers/GrokDriver.ts";
+import { OpenCodeDriver, type OpenCodeDriverEnv } from "../Drivers/OpenCodeDriver.ts";
 import * as ModelManifest from "../ModelManifest.ts";
 import { OpenCodeRuntimeLive } from "../opencodeRuntime.ts";
 import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
@@ -141,6 +143,19 @@ const makeOpenCodeConfig = (overrides: Partial<OpenCodeSettings>): OpenCodeSetti
   customModels: [],
   ...overrides,
 });
+
+/**
+ * The env union for the drivers these tests register. Deliberately *not*
+ * `BuiltInDriversEnv`: this build ships OpenCode only, but the registry is
+ * driver-agnostic and the "many drivers, one registry" slice is what keeps it
+ * that way. Re-adding a provider is meant to be a `BUILT_IN_DRIVERS` edit.
+ */
+type TestDriversEnv =
+  | CodexDriverEnv
+  | ClaudeDriverEnv
+  | CursorDriverEnv
+  | GrokDriverEnv
+  | OpenCodeDriverEnv;
 
 const makeTildeProviderFixtures = Effect.fn(
   "ProviderInstanceRegistryLive.test.makeTildeProviderFixtures",
@@ -660,7 +675,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
         },
       };
 
-      const { registry } = yield* makeProviderInstanceRegistry<BuiltInDriversEnv>({
+      const { registry } = yield* makeProviderInstanceRegistry<TestDriversEnv>({
         drivers: [CodexDriver, ClaudeDriver, CursorDriver, GrokDriver, OpenCodeDriver],
         configMap,
       });

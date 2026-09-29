@@ -32,6 +32,13 @@ using the same workspace. It is broader than the current thread, especially on a
 shared external server. Use **Allow once** for a single request. Denying an action
 does not stop the whole turn.
 
+## Questions
+
+When OpenCode asks a question, it stays blocked until you answer it. Use the
+dismiss control on the question panel to drop it instead; OpenCode stops waiting
+and the turn continues without your answer. Stop the turn if you want the agent to
+give up on the work entirely.
+
 ## Refresh models, commands, and skills
 
 After changing an OpenCode login or configuration, use **Refresh provider status**

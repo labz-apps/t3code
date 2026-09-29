@@ -84,6 +84,26 @@ describe("toOpenCodePermissionReply", () => {
     ["decline", "reject"],
     ["cancel", "reject"],
   ] as const)("maps %s to %s", (decision, reply) => {
-    NodeAssert.equal(toOpenCodePermissionReply(decision), reply);
+    NodeAssert.deepEqual(toOpenCodePermissionReply(decision), { reply });
+  });
+
+  it("carries a rejection reason back to the model", () => {
+    NodeAssert.deepEqual(toOpenCodePermissionReply("decline", "  no schema changes  "), {
+      reply: "reject",
+      message: "no schema changes",
+    });
+    NodeAssert.deepEqual(toOpenCodePermissionReply("cancel", "stop, wrong repo"), {
+      reply: "reject",
+      message: "stop, wrong repo",
+    });
+  });
+
+  it("sends no message when there is no reason, or none to give on an approval", () => {
+    NodeAssert.deepEqual(toOpenCodePermissionReply("decline"), { reply: "reject" });
+    NodeAssert.deepEqual(toOpenCodePermissionReply("decline", "   "), { reply: "reject" });
+    NodeAssert.deepEqual(toOpenCodePermissionReply("accept", "go ahead"), { reply: "once" });
+    NodeAssert.deepEqual(toOpenCodePermissionReply("acceptAlways", "go ahead"), {
+      reply: "always",
+    });
   });
 });

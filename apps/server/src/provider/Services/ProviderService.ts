@@ -14,6 +14,7 @@
 import type {
   ProviderInterruptTurnInput,
   ProviderInstanceId,
+  ProviderRejectUserInputInput,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderRuntimeEvent,
@@ -82,9 +83,36 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * Abandon a provider structured user-input request instead of answering it.
+   *
+   * Optional for the same reason as the adapter method: absent means the
+   * provider cannot take a question back, and the decider never asks it to.
+   */
+  readonly rejectUserInput?: (
+    input: ProviderRejectUserInputInput,
+  ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
    * Stop a provider session.
    */
   readonly stopSession: (
+    input: ProviderStopSessionInput,
+  ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Retire a provider session for good, when T3 is deleting the thread.
+   *
+   * Separate from `stopSession` because stopping is not deleting: OpenCode
+   * persists every session in its own database, so a user who deletes
+   * thousands of T3 threads would otherwise accumulate thousands of orphans
+   * that still show up in their own OpenCode TUI. Adapters that own no durable
+   * session store make this a no-op.
+   *
+   * Must be called *before* `stopSession` while the session is still live —
+   * teardown can drop the handle needed to reach it. Never fails the caller;
+   * it reports what it did.
+   */
+  readonly deleteSession: (
     input: ProviderStopSessionInput,
   ) => Effect.Effect<void, ProviderServiceError>;
 

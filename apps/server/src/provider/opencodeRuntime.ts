@@ -190,16 +190,26 @@ export interface OpenCodeInventory {
   readonly commands?: ReadonlyArray<OpenCodeSlashCommand>;
 }
 
-export type OpenCodeSlashCommand = Pick<Command, "name" | "description" | "source" | "hints">;
+// `agent`, `model` and `subtask` are what separate a real command from a plain
+// prompt template: they say the command pins a different agent, pins a model,
+// or runs as a subtask instead of the main session. Dropping them here made
+// those commands indistinguishable from prose in T3's composer.
+export type OpenCodeSlashCommand = Pick<
+  Command,
+  "name" | "description" | "source" | "agent" | "model" | "subtask" | "hints"
+>;
 
 /** Command templates stay in OpenCode, which expands arguments and runs MCP prompts. */
 export const loadOpenCodeCommands = (client: OpencodeClient) =>
   runOpenCodeSdk("command.list", (signal) => client.command.list(undefined, { signal })).pipe(
     Effect.map((result): ReadonlyArray<OpenCodeSlashCommand> =>
-      (result.data ?? []).map(({ name, description, source, hints }) => ({
+      (result.data ?? []).map(({ name, description, source, agent, model, subtask, hints }) => ({
         name,
         ...(description === undefined ? {} : { description }),
         ...(source === undefined ? {} : { source }),
+        ...(agent === undefined ? {} : { agent }),
+        ...(model === undefined ? {} : { model }),
+        ...(subtask === undefined ? {} : { subtask }),
         hints,
       })),
     ),
@@ -539,19 +549,32 @@ export function buildOpenCodePermissionRules(runtimeMode: RuntimeMode): Permissi
   ];
 }
 
+/** The body of OpenCode's `POST /permission/{id}/reply`. */
+export interface OpenCodePermissionReply {
+  readonly reply: "once" | "always" | "reject";
+  /**
+   * Reason for a refusal, handed back to the model. Omitted unless the user
+   * declined and said why — it is the only channel a reviewer has to tell the
+   * agent what was wrong, and an approval has nothing to say.
+   */
+  readonly message?: string;
+}
+
 export function toOpenCodePermissionReply(
   decision: ProviderApprovalDecision,
-): "once" | "always" | "reject" {
+  reason?: string,
+): OpenCodePermissionReply {
+  const message = reason?.trim();
   switch (decision) {
     case "accept":
-      return "once";
+      return { reply: "once" };
     case "acceptForSession":
     case "acceptAlways":
-      return "always";
+      return { reply: "always" };
     case "decline":
     case "cancel":
     default:
-      return "reject";
+      return message ? { reply: "reject", message } : { reply: "reject" };
   }
 }
 
@@ -1048,6 +1071,8 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
         skills = parseSkillsCliOutput(skillsResult.value.stdout);
       }
 
+      // `commands` is deliberately absent: the CLI has no command-list command,
+      // so this fallback cannot report commands at all — not even the name.
       return {
         providerList: { all: allProviders, default: {}, connected },
         agents,

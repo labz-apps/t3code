@@ -19,7 +19,10 @@ const NOW = "2026-01-01T00:00:00.000Z";
 const threadId = ThreadId.make("thread-1");
 const requestId = ApprovalRequestId.make("question-1");
 
-function makeRequest(responseMode: "message" | undefined): OrchestrationThreadActivity {
+function makeRequest(payload: {
+  responseMode?: "message";
+  dismissible?: boolean;
+}): OrchestrationThreadActivity {
   return {
     id: EventId.make(requestId),
     kind: "user-input.requested",
@@ -29,7 +32,7 @@ function makeRequest(responseMode: "message" | undefined): OrchestrationThreadAc
     createdAt: NOW,
     payload: {
       requestId,
-      ...(responseMode === undefined ? {} : { responseMode }),
+      ...payload,
       questions: [{ id: "0", header: "Q", question: "Continue?", options: [] }],
     },
   };
@@ -84,7 +87,7 @@ const command = {
 it.layer(NodeServices.layer)("user input dismiss decider", (it) => {
   it.effect("closes an async question without sending a message or starting a turn", () =>
     Effect.gen(function* () {
-      const request = makeRequest("message");
+      const request = makeRequest({ responseMode: "message" });
       const readModel = makeReadModel([request]);
       const result = yield* decideOrchestrationCommand({
         command,
@@ -107,9 +110,30 @@ it.layer(NodeServices.layer)("user input dismiss decider", (it) => {
     }),
   );
 
+  it.effect("closes a dismissible native question and tells the provider to abandon it", () =>
+    Effect.gen(function* () {
+      const request = makeRequest({ dismissible: true });
+      const result = yield* decideOrchestrationCommand({
+        command,
+        readModel: makeReadModel([request]),
+        userInputActivity: request,
+      });
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((event) => event.type)).toEqual([
+        "thread.activity-appended",
+        "thread.user-input-dismiss-requested",
+      ]);
+      expect(events[0]?.payload).toMatchObject({
+        threadId,
+        activity: { kind: "user-input.resolved", payload: { requestId } },
+      });
+      expect(events[1]?.payload).toEqual({ threadId, requestId, createdAt: NOW });
+    }),
+  );
+
   it.effect("rejects dismissing a native callback question", () =>
     Effect.gen(function* () {
-      const request = makeRequest(undefined);
+      const request = makeRequest({});
       const result = yield* decideOrchestrationCommand({
         command,
         readModel: makeReadModel([request]),
@@ -125,13 +149,13 @@ it.layer(NodeServices.layer)("user input dismiss decider", (it) => {
   it.effect("rejects dismissing a question that was already resolved", () =>
     Effect.gen(function* () {
       const resolved: OrchestrationThreadActivity = {
-        ...makeRequest("message"),
+        ...makeRequest({ responseMode: "message" }),
         id: EventId.make("resolved"),
         kind: "user-input.resolved",
       };
       const result = yield* decideOrchestrationCommand({
         command,
-        readModel: makeReadModel([makeRequest("message"), resolved]),
+        readModel: makeReadModel([makeRequest({ responseMode: "message" }), resolved]),
         userInputActivity: resolved,
       }).pipe(Effect.flip);
       expect(result).toMatchObject({

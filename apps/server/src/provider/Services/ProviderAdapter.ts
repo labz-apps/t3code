@@ -94,12 +94,14 @@ export interface ProviderAdapterShape<TError> {
   readonly interruptTurn: (threadId: ThreadId, turnId?: TurnId) => Effect.Effect<void, TError>;
 
   /**
-   * Respond to an interactive approval request.
+   * Respond to an interactive approval request. `reason` carries the user's
+   * explanation on a refusal, which some providers feed back to the model.
    */
   readonly respondToRequest: (
     threadId: ThreadId,
     requestId: ApprovalRequestId,
     decision: ProviderApprovalDecision,
+    reason?: string,
   ) => Effect.Effect<void, TError>;
 
   /**
@@ -112,9 +114,32 @@ export interface ProviderAdapterShape<TError> {
   ) => Effect.Effect<void, TError>;
 
   /**
+   * Dismiss a structured user-input request instead of answering it. Optional:
+   * omit when the provider cannot abandon a question. Not every provider can —
+   * a provider that has already committed to a reply cannot take it back.
+   */
+  readonly rejectUserInput?: (
+    threadId: ThreadId,
+    requestId: ApprovalRequestId,
+  ) => Effect.Effect<void, TError>;
+
+  /**
    * Stop one provider session.
    */
   readonly stopSession: (threadId: ThreadId) => Effect.Effect<void, TError>;
+
+  /**
+   * Permanently delete one provider session, for when T3 retires a thread.
+   *
+   * Optional because stopping is not deleting: OpenCode keeps every session in
+   * its own database, so a T3 user who deletes thousands of threads
+   * accumulates thousands of orphans that still show up in their own OpenCode
+   * TUI. Adapters that own no durable session store omit this.
+   *
+   * Called after the thread is gone, so it must never fail the caller — the
+   * reactor logs and moves on.
+   */
+  readonly deleteSession?: (threadId: ThreadId) => Effect.Effect<void, TError>;
 
   /**
    * List currently active provider sessions for this adapter.

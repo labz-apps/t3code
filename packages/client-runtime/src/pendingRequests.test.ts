@@ -303,6 +303,21 @@ describe("pending questions", () => {
     expect(derivePendingRequests([native]).userInputs[0]?.dismissible).toBe(false);
   });
 
+  it("marks a question the provider can abandon as dismissible", () => {
+    const question = {
+      id: "0",
+      header: "Question",
+      question: "Continue?",
+      options: [{ label: "Yes", description: "" }],
+      multiSelect: false,
+    };
+    const dismissible = makeActivity({
+      kind: "user-input.requested",
+      payload: { requestId: "dismissible-1", dismissible: true, questions: [question] },
+    });
+    expect(derivePendingRequests([dismissible]).userInputs[0]?.dismissible).toBe(true);
+  });
+
   it("preserves native choice values and the custom-answer restriction", () => {
     const question = {
       id: "interaction-result",

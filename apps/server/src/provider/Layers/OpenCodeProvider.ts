@@ -31,6 +31,10 @@ import * as OpenCodeServerOwner from "../OpenCodeServerOwner.ts";
 
 const OPENCODE_PRESENTATION = {
   displayName: "OpenCode",
+  // OpenCode ships `plan` and `build` as primary agents, so the model picker's
+  // Agent select is the one plan/build surface (see
+  // `openCodeCapabilitiesForModel`). T3's own mode toggle would be a second
+  // door to the same two agents, so it stays hidden.
   showInteractionModeToggle: false,
 } as const;
 const OPENCODE_VERSION_PROBE_TIMEOUT = "4 seconds";
@@ -218,6 +222,10 @@ function openCodeCapabilitiesForModel(input: {
       ? { id: value, label: titleCaseSlug(value), isDefault: true as const }
       : { id: value, label: titleCaseSlug(value) },
   );
+  // `mode` is OpenCode's own "can the user pick this?" answer. Primary agents
+  // include `plan` and `build`, which is why they reach the picker as-is and
+  // the Agent select is the only plan/build surface. Do not filter them out:
+  // a custom install that drops `plan` should just not offer it.
   const primaryAgents = input.agents.filter(
     (agent) => !agent.hidden && (agent.mode === "primary" || agent.mode === "all"),
   );
@@ -257,6 +265,10 @@ function openCodeCapabilitiesForModel(input: {
 
 function flattenOpenCodeModels(input: OpenCodeInventory): ReadonlyArray<ServerProviderModel> {
   const connected = new Set(input.providerList.connected);
+  // OpenCode's own per-provider default model map (`GET /provider` `default`).
+  // Surfacing it as `isDefault` is what gives the picker a remembered choice
+  // without T3 inventing a second place to store it.
+  const providerDefaults = input.providerList.default;
   const models: Array<ServerProviderModel> = [];
 
   for (const provider of input.providerList.all) {
@@ -264,17 +276,24 @@ function flattenOpenCodeModels(input: OpenCodeInventory): ReadonlyArray<ServerPr
       continue;
     }
 
+    const subProvider = nonEmptyTrimmed(provider.name);
+    // Empty on the `opencode models` CLI fallback path, which cannot report
+    // defaults — every model there is simply not a default.
+    const defaultModelId = nonEmptyTrimmed(providerDefaults[provider.id]);
     for (const model of Object.values(provider.models)) {
       const name = nonEmptyTrimmed(model.name);
       if (!name) {
         continue;
       }
 
-      const subProvider = nonEmptyTrimmed(provider.name);
       models.push({
         slug: `${provider.id}/${model.id}`,
         name,
+        modelProviderId: provider.id,
         ...(subProvider ? { subProvider } : {}),
+        // Omitted rather than `false`: a connected OpenCode install reports
+        // hundreds of models and the flag is meaningless on all but one.
+        ...(defaultModelId === model.id ? { isDefault: true } : {}),
         isCustom: false,
         capabilities: openCodeCapabilitiesForModel({
           providerID: provider.id,
@@ -321,16 +340,27 @@ export function openCodeCommandsToServerProviderSlashCommands(
 ): ReadonlyArray<ServerProviderSlashCommand> {
   const commands: ServerProviderSlashCommand[] = [COMPACT_SLASH_COMMAND];
   const names = new Set([COMPACT_SLASH_COMMAND.name]);
+  // Skill-backed commands are listed too. OpenCode expands them itself, so
+  // hiding them here only left `$name` as a second way to start the same thing;
+  // `source` lets the composer label them for what they are.
   for (const command of input ?? []) {
     const name = trimOptional(command.name);
-    if (!name || names.has(name) || command.source === "skill") continue;
+    if (!name || names.has(name)) continue;
     names.add(name);
     const description = trimOptional(command.description);
     const hint = trimOptional(command.hints.join(" "));
+    const agent = trimOptional(command.agent);
+    const model = trimOptional(command.model);
     commands.push({
       name,
+      // Always reported so the composer never has to tell "OpenCode listed this
+      // without a source" apart from "this driver reports sources at all".
+      source: command.source ?? "unknown",
       ...(description ? { description } : {}),
       ...(hint ? { input: { hint } } : {}),
+      ...(agent ? { agent } : {}),
+      ...(model ? { model } : {}),
+      ...(command.subtask ? { subtask: true } : {}),
     });
   }
   return commands;

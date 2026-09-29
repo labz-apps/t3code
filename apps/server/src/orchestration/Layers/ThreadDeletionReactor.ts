@@ -49,6 +49,16 @@ const make = Effect.gen(function* () {
       threadId,
     });
 
+  // Retire before stopping. `stopSession` tears down the handle an adapter
+  // needs to reach the provider-side record, so deleting afterwards would
+  // silently no-op and orphan the session in the user's own OpenCode database.
+  const retireProviderSession = (threadId: ThreadDeletedEvent["payload"]["threadId"]) =>
+    logCleanupCauseUnlessInterrupted({
+      effect: providerService.deleteSession({ threadId }),
+      message: "thread deletion cleanup skipped provider session delete",
+      threadId,
+    });
+
   const closeThreadTerminals = (threadId: ThreadDeletedEvent["payload"]["threadId"]) =>
     logCleanupCauseUnlessInterrupted({
       effect: terminalManager.close({ threadId, deleteHistory: true }),
@@ -60,6 +70,7 @@ const make = Effect.gen(function* () {
     event: ThreadDeletedEvent,
   ) {
     const { threadId } = event.payload;
+    yield* retireProviderSession(threadId);
     yield* stopProviderSession(threadId);
     yield* closeThreadTerminals(threadId);
   });

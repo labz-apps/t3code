@@ -82,6 +82,7 @@ type ProviderIntentEvent = Extract<
       | "thread.turn-interrupt-requested"
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
+      | "thread.user-input-dismiss-requested"
       | "thread.session-stop-requested"
       | "thread.settled"
       | "thread.session-set";
@@ -1651,6 +1652,7 @@ const make = Effect.gen(function* () {
         threadId: event.payload.threadId,
         requestId: event.payload.requestId,
         decision: event.payload.decision,
+        ...(event.payload.reason !== undefined ? { reason: event.payload.reason } : {}),
       })
       .pipe(
         Effect.catchCause((cause) =>
@@ -1716,6 +1718,47 @@ const make = Effect.gen(function* () {
         );
     },
   );
+
+  const processUserInputDismissRequested = Effect.fn("processUserInputDismissRequested")(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.user-input-dismiss-requested" }>,
+  ) {
+    const rejectUserInput = providerService.rejectUserInput;
+    const thread = yield* resolveThreadShell(event.payload.threadId);
+    if (!thread) {
+      return;
+    }
+    const hasSession = thread.session && thread.session.status !== "stopped";
+    if (!hasSession || !rejectUserInput) {
+      return yield* appendProviderFailureActivity({
+        threadId: event.payload.threadId,
+        kind: "provider.user-input.respond.failed",
+        summary: "Provider user input dismiss failed",
+        detail: "No active provider session is bound to this thread.",
+        turnId: null,
+        createdAt: event.payload.createdAt,
+        requestId: event.payload.requestId,
+      });
+    }
+
+    yield* rejectUserInput({
+      threadId: event.payload.threadId,
+      requestId: event.payload.requestId,
+    }).pipe(
+      Effect.catchCause((cause) =>
+        appendProviderFailureActivity({
+          threadId: event.payload.threadId,
+          kind: "provider.user-input.respond.failed",
+          summary: "Provider user input dismiss failed",
+          detail: isUnknownPendingUserInputRequestError(cause)
+            ? stalePendingRequestDetail("user-input", event.payload.requestId)
+            : Cause.pretty(cause),
+          turnId: null,
+          createdAt: event.payload.createdAt,
+          requestId: event.payload.requestId,
+        }),
+      ),
+    );
+  });
 
   const processSessionStopRequested = Effect.fn("processSessionStopRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
@@ -1838,6 +1881,9 @@ const make = Effect.gen(function* () {
       case "thread.user-input-response-requested":
         yield* processUserInputResponseRequested(event);
         return;
+      case "thread.user-input-dismiss-requested":
+        yield* processUserInputDismissRequested(event);
+        return;
       case "thread.session-stop-requested":
         yield* processSessionStopRequested(event);
         return;
@@ -1911,6 +1957,7 @@ const make = Effect.gen(function* () {
         event.type === "thread.turn-interrupt-requested" ||
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
+        event.type === "thread.user-input-dismiss-requested" ||
         event.type === "thread.session-stop-requested" ||
         event.type === "thread.settled"
       ) {

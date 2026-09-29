@@ -8,6 +8,7 @@ import {
   type ProviderSession,
   RuntimeItemId,
   RuntimeRequestId,
+  type ThreadTokenUsageSnapshot,
   ThreadId,
   type ToolLifecycleItemType,
   type TurnTokenUsage,
@@ -336,6 +337,50 @@ type OpenCodeTextPartState = Pick<OpenCodeTextPart, "id" | "messageID" | "type" 
 
 type OpenCodeStepUsage = Pick<Extract<Part, { readonly type: "step-finish" }>, "id" | "tokens">;
 
+type OpenCodeStepTokens = OpenCodeStepUsage["tokens"];
+
+/**
+ * Map one OpenCode `step-finish` part onto the shared context-window snapshot
+ * that drives the client's context meter.
+ *
+ * `usedTokens` is the prompt the model just ran on: `tokens.input` plus both
+ * cache counters, the same reading `accumulateOpenCodeStepUsage` applies to the
+ * identical object. A step is the freshest context figure OpenCode publishes,
+ * and the one the meter needs — the session-wide `Session.tokens` is a running
+ * total that would grow without bound and suggest compaction far too early.
+ *
+ * `maxTokens` is omitted because a step carries no context limit, and
+ * `totalProcessedTokens` is omitted because OpenCode does not document whether
+ * `tokens.total` is per-step or per-session. Guessing either would put a wrong
+ * number in front of the user.
+ */
+export function toOpenCodeTokenUsageSnapshot(
+  tokens: OpenCodeStepTokens,
+): ThreadTokenUsageSnapshot | undefined {
+  const inputTokens = tokens.input;
+  const cachedInputTokens = tokens.cache.read;
+  const cacheCreationTokens = tokens.cache.write;
+  const outputTokens = tokens.output;
+  const reasoningOutputTokens = tokens.reasoning;
+  const usedTokens = inputTokens + cachedInputTokens + cacheCreationTokens;
+  if (usedTokens <= 0) {
+    return undefined;
+  }
+
+  return {
+    usedTokens,
+    inputTokens,
+    cachedInputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    lastUsedTokens: usedTokens,
+    lastInputTokens: inputTokens,
+    lastCachedInputTokens: cachedInputTokens,
+    lastOutputTokens: outputTokens,
+    lastReasoningOutputTokens: reasoningOutputTokens,
+  };
+}
+
 interface OpenCodeSessionContext {
   session: ProviderSession;
   readonly client: OpencodeClient;
@@ -353,6 +398,10 @@ interface OpenCodeSessionContext {
   // OpenCode permits edits to completed parts. Keep text for snapshot comparison
   // until native removal or session teardown, but do not retain other part payloads.
   readonly textPartsByMessageId: Map<string, Map<string, OpenCodeTextPartState>>;
+  // Last `step-finish` part already reported as `thread.token-usage.updated`.
+  // OpenCode re-PATCHes a finished part, so without this the context-window
+  // activity would repeat for a step the meter has already seen.
+  lastTokenUsagePartId: string | undefined;
   turnTokenUsage: OpenCodeTurnTokenUsageAccumulator | undefined;
   activeTurnId: TurnId | undefined;
   activeAgent: string | undefined;
@@ -594,6 +643,9 @@ function normalizeQuestionRequest(request: QuestionRequest): ReadonlyArray<UserI
       description: option.description,
     })),
     ...(question.multiple ? { multiSelect: true } : {}),
+    // OpenCode only offers a free-text field when `custom` is set, so surface
+    // that rather than letting every client assume one is available.
+    ...(question.custom ? { allowCustomAnswer: true } : {}),
   }));
 }
 
@@ -863,6 +915,76 @@ const abortOpenCodeSessionForTeardown = Effect.fn("abortOpenCodeSessionForTeardo
     Effect.timeout("1 second"),
     Effect.ignore({ log: true }),
   );
+});
+
+/**
+ * Permanently delete an OpenCode session and every session below it.
+ *
+ * `session.delete` does not cascade, and OpenCode stamps a `parentID` on every
+ * subagent session, so a root-only delete would strand the subagent transcripts
+ * in the user's own OpenCode TUI — the exact orphan this exists to clear.
+ * Children are therefore removed before their parent, deepest first.
+ */
+const deleteOpenCodeSessionTree = Effect.fn("deleteOpenCodeSessionTree")(function* (
+  context: OpenCodeSessionContext,
+) {
+  const visited = new Set([context.openCodeSessionId]);
+  const requestSemaphore = Semaphore.makeUnsafe(8);
+
+  const visit = (sessionId: string): Effect.Effect<OpenCodeRuntimeError | undefined> =>
+    Effect.gen(function* () {
+      const childrenResult = yield* requestSemaphore
+        .withPermit(
+          runOpenCodeSdk("session.children", (signal) =>
+            context.client.session.children({ sessionID: sessionId }, { signal }),
+          ),
+        )
+        .pipe(
+          Effect.catchIf(
+            (cause) => isOpenCodeNotFound(cause),
+            () => Effect.undefined,
+          ),
+          Effect.result,
+        );
+      if (childrenResult._tag === "Failure") {
+        return childrenResult.failure;
+      }
+
+      const newChildren = (childrenResult.success?.data ?? []).filter((child) => {
+        if (visited.has(child.id)) {
+          return false;
+        }
+        visited.add(child.id);
+        return true;
+      });
+      const childFailures = yield* Effect.forEach(newChildren, (child) => visit(child.id), {
+        concurrency: 8,
+      });
+
+      const deleteResult = yield* requestSemaphore
+        .withPermit(
+          runOpenCodeSdk("session.delete", (signal) =>
+            context.client.session.delete({ sessionID: sessionId }, { signal }),
+          ),
+        )
+        .pipe(
+          // A session OpenCode already dropped is the end state we want.
+          Effect.catchIf(
+            (cause) => isOpenCodeNotFound(cause),
+            () => Effect.void,
+          ),
+          Effect.result,
+        );
+      if (deleteResult._tag === "Failure") {
+        return childFailures.find((failure) => failure !== undefined) ?? deleteResult.failure;
+      }
+      return childFailures.find((failure) => failure !== undefined);
+    });
+
+  const firstFailure = yield* visit(context.openCodeSessionId);
+  if (firstFailure) {
+    return yield* firstFailure;
+  }
 });
 
 const cancelPendingOpenCodePrompt = Effect.fn("cancelPendingOpenCodePrompt")(function* (
@@ -1852,7 +1974,9 @@ export function makeOpenCodeAdapter(
       emitUnsafe({
         ...base,
         type: "user-input.requested",
-        payload: { questions: normalizeQuestionRequest(request) },
+        // `question.reject` is the only way to unblock an agent the user walked
+        // away from, so every OpenCode question can be dismissed.
+        payload: { questions: normalizeQuestionRequest(request), dismissible: true },
       });
     });
 
@@ -2468,6 +2592,25 @@ export function makeOpenCodeAdapter(
             }
           }
 
+          // The context meter is the one consumer that needs the latest step
+          // rather than an owned-subset rollup, and only parent-session parts
+          // reach this switch, so report every fresh step-finish.
+          if (part.type === "step-finish" && context.lastTokenUsagePartId !== part.id) {
+            context.lastTokenUsagePartId = part.id;
+            const snapshot = toOpenCodeTokenUsageSnapshot(part.tokens);
+            if (snapshot) {
+              yield* emit({
+                ...(yield* buildEventBase({
+                  threadId: context.session.threadId,
+                  turnId,
+                  raw: event,
+                })),
+                type: "thread.token-usage.updated",
+                payload: { usage: snapshot },
+              });
+            }
+          }
+
           if ((part.type === "text" || part.type === "reasoning") && messageRole !== "user") {
             const state = retainOpenCodeTextPart(context, part);
             if (messageRole === "assistant") {
@@ -2604,6 +2747,9 @@ export function makeOpenCodeAdapter(
           }
 
           if (event.properties.status.type === "retry") {
+            // OpenCode hangs the recovery affordance ("Sign in", "Add credit")
+            // off `action`; without it the user only learns something broke.
+            const actionLink = trimText(event.properties.status.action?.link);
             yield* emit({
               ...(yield* buildEventBase({
                 threadId: context.session.threadId,
@@ -2614,6 +2760,7 @@ export function makeOpenCodeAdapter(
               payload: {
                 message: `OpenCode retry ${event.properties.status.attempt}: ${event.properties.status.message}`,
                 detail: event.properties.status,
+                ...(actionLink ? { link: actionLink } : {}),
               },
             });
             break;
@@ -3018,6 +3165,7 @@ export function makeOpenCodeAdapter(
           pendingQuestions: new Map(),
           textPartsByMessageId: new Map(),
           messageRoleById: new Map(),
+          lastTokenUsagePartId: undefined,
           turnTokenUsage: undefined,
           activeTurnId: undefined,
           activeAgent: undefined,
@@ -3755,7 +3903,7 @@ export function makeOpenCodeAdapter(
 
     const respondToRequest: OpenCodeAdapterShape["respondToRequest"] = Effect.fn(
       "respondToRequest",
-    )(function* (threadId, requestId, decision) {
+    )(function* (threadId, requestId, decision, reason) {
       const context = yield* ensureSessionContext(sessions, threadId);
       const request = context.pendingPermissions.get(requestId);
       if (!request) {
@@ -3770,12 +3918,15 @@ export function makeOpenCodeAdapter(
         });
       }
 
-      const reply = toOpenCodePermissionReply(decision);
+      // `reason` only rides along on a refusal — it is the user's explanation
+      // for the model, and OpenCode has nowhere to put it on an approval.
+      const permissionReply = toOpenCodePermissionReply(decision, reason);
+      const reply = permissionReply.reply;
       yield* runOpenCodeSdk("permission.reply", (signal) =>
         context.client.permission.reply(
           {
             requestID: requestId,
-            reply,
+            ...permissionReply,
           },
           { signal },
         ),
@@ -3802,6 +3953,57 @@ export function makeOpenCodeAdapter(
           properties: { sessionID: request.sessionID, requestID: requestId, reply },
         },
         { type: "permission.reply", requestID: requestId, reply },
+      );
+    });
+
+    /**
+     * Bail out of a question instead of answering it. `question.reply` is the
+     * only door T3 had, so an agent asking something the user does not want to
+     * answer stayed blocked until the whole turn was interrupted.
+     */
+    const rejectOpenCodeQuestion = Effect.fn("rejectOpenCodeQuestion")(function* (
+      context: OpenCodeSessionContext,
+      requestId: string,
+      raw: unknown,
+    ) {
+      const request = context.pendingQuestions.get(requestId);
+      if (!request) {
+        if (context.emittedTerminalRequestIds.has(requestId)) return;
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "question.reject",
+          detail:
+            context.pendingRequestRecovery || context.requestRelationRetries.has(requestId)
+              ? "OpenCode is still loading this question. Try again."
+              : `Unknown pending user-input request: ${requestId}`,
+        });
+      }
+
+      yield* runOpenCodeSdk("question.reject", (signal) =>
+        context.client.question.reject({ requestID: requestId }, { signal }),
+      ).pipe(
+        Effect.mapError(toRequestError),
+        Effect.timeoutOrElse({
+          duration: "10 seconds",
+          orElse: () =>
+            Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "question.reject",
+                detail: "OpenCode question rejection did not complete within 10 seconds.",
+              }),
+            ),
+        }),
+      );
+      yield* resolvePendingOpenCodeRequest(context, requestId);
+      yield* emitTerminalOpenCodeRequest(
+        context,
+        {
+          id: `reject:${requestId}`,
+          type: "question.rejected",
+          properties: { sessionID: request.sessionID, requestID: requestId },
+        },
+        raw,
       );
     });
 
@@ -3861,6 +4063,16 @@ export function makeOpenCodeAdapter(
       );
     });
 
+    const rejectUserInput: NonNullable<OpenCodeAdapterShape["rejectUserInput"]> = Effect.fn(
+      "rejectUserInput",
+    )(function* (threadId, requestId) {
+      const context = yield* ensureSessionContext(sessions, threadId);
+      yield* rejectOpenCodeQuestion(context, requestId, {
+        type: "question.reject",
+        requestID: requestId,
+      });
+    });
+
     const stopSession: OpenCodeAdapterShape["stopSession"] = Effect.fn("stopSession")(
       function* (threadId) {
         const context = sessions.get(threadId);
@@ -3884,6 +4096,38 @@ export function makeOpenCodeAdapter(
             exitKind: "graceful",
           },
         });
+      },
+    );
+
+    const deleteSession: OpenCodeAdapterShape["deleteSession"] = Effect.fn("deleteSession")(
+      function* (threadId) {
+        const context = sessions.get(threadId);
+        // No handle means nothing to delete: the thread never reached this
+        // process, or its session is already gone. The caller has no way to
+        // act on that, so report success.
+        if (!context) {
+          return;
+        }
+        // Delete before the teardown runs. `stopOpenCodeContext` closes
+        // `sessionScope`, which kills a scope-owned OpenCode server and leaves
+        // the session unreachable. The abort first mirrors `stopSession` so a
+        // live turn is not deleted out from under OpenCode mid-generation.
+        yield* abortOpenCodeSessionForTeardown(context);
+        const deleteExit = yield* Effect.exit(
+          deleteOpenCodeSessionTree(context).pipe(Effect.timeout("10 seconds")),
+        );
+        yield* stopOpenCodeContext(context);
+        deleteContextIfCurrent(context);
+        if (Exit.isFailure(deleteExit)) {
+          // Local teardown already succeeded, so surface the remote miss
+          // without leaving a half-live session behind.
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "session.delete",
+            detail: openCodeRuntimeErrorDetail(Cause.squash(deleteExit.cause)),
+            cause: Cause.squash(deleteExit.cause),
+          });
+        }
       },
     );
 
@@ -4045,7 +4289,9 @@ export function makeOpenCodeAdapter(
       interruptTurn,
       respondToRequest,
       respondToUserInput,
+      rejectUserInput,
       stopSession,
+      deleteSession,
       listSessions,
       hasSession,
       readThread,

@@ -2,6 +2,7 @@ import {
   ClaudeSettings,
   CodexSettings,
   type ExecutionEnvironmentPlatformOs,
+  OpenCodeSettings,
   type ServerProvider,
   type ServerSettings,
 } from "@t3tools/contracts";
@@ -10,6 +11,7 @@ import * as Schema from "effect/Schema";
 
 const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
 const decodeCodexSettings = Schema.decodeUnknownOption(CodexSettings);
+const decodeOpenCodeSettings = Schema.decodeUnknownOption(OpenCodeSettings);
 const SAFE_SHELL_BINARY_PATTERN = /^[A-Za-z0-9_./:\\-]+$/;
 
 function quoteProviderBinary(
@@ -72,11 +74,17 @@ export function selectOnboardingProvidersByDriver(
 }
 
 /**
- * Official standalone installers. Neither needs Node or npm, and both land in
- * the paths the server's provider maintenance recognizes as native, so the
- * one-click updater in Settings keeps working after install.
+ * Install commands for the setup terminal, keyed on the environment's platform
+ * (not the client's): a Windows desktop driving a WSL server gets the POSIX
+ * form. OpenCode is npm-distributed (`opencode-ai`, matching
+ * `Drivers/OpenCodeDriver.ts`), so both platforms install the same way; the
+ * script form is kept per-platform for a fork that ships a native installer.
  */
-const NATIVE_INSTALL_COMMANDS = {
+const INSTALL_COMMANDS = {
+  opencode: {
+    windows: "npm install -g opencode-ai",
+    posix: "npm install -g opencode-ai",
+  },
   claudeAgent: {
     windows: "irm https://claude.ai/install.ps1 | iex",
     posix: "curl -fsSL https://claude.ai/install.sh | bash",
@@ -88,16 +96,15 @@ const NATIVE_INSTALL_COMMANDS = {
 } as const;
 
 /**
- * Install command for the setup terminal, keyed on the environment's platform
- * (not the client's): a Windows desktop driving a WSL server gets the shell
- * script. Unknown platforms get the shell script too, since the terminal there
- * is a POSIX shell in practice.
+ * Install command for the setup terminal, keyed on the environment's platform.
+ * Unknown platforms get the POSIX script, since the terminal there is a POSIX
+ * shell in practice.
  */
 export function resolveOnboardingProviderInstallCommand(
-  driver: keyof typeof NATIVE_INSTALL_COMMANDS,
+  driver: keyof typeof INSTALL_COMMANDS,
   platform: ExecutionEnvironmentPlatformOs,
 ): string {
-  const commands = NATIVE_INSTALL_COMMANDS[driver];
+  const commands = INSTALL_COMMANDS[driver];
   return platform === "windows" ? commands.windows : commands.posix;
 }
 
@@ -108,6 +115,17 @@ export function resolveOnboardingProviderLoginCommand(
   platform: ExecutionEnvironmentPlatformOs,
 ): string {
   const instance = settings.providerInstances[provider.instanceId];
+
+  if (provider.driver === "opencode") {
+    const config = decodeOpenCodeSettings(
+      instance ? (instance.config ?? {}) : settings.providers.opencode,
+    );
+    const binaryPath = Option.isSome(config) ? config.value.binaryPath : "opencode";
+    // OpenCode owns its own credentials; `auth login` is the only way to
+    // connect an upstream model provider, and T3 deliberately does not take
+    // that over.
+    return `${quoteProviderBinary(binaryPath, "opencode", platform)} auth login`;
+  }
 
   if (provider.driver === "claudeAgent") {
     const config = decodeClaudeSettings(

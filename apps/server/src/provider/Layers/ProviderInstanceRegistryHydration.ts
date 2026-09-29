@@ -35,9 +35,10 @@
  *      `ProviderInstanceRegistryMutator.reconcile` on every emission.
  *
  * Failures inside the watcher are logged and swallowed so a single bad
- * settings emission cannot kill the registry. Unknown drivers and invalid
- * configs already round-trip through the registry's own "unavailable"
- * shadow bucket.
+ * settings emission cannot kill the registry. Entries for drivers this build
+ * does not ship are filtered out before the registry ever sees them, so the
+ * registry's "unavailable" shadow bucket is reserved for entries that *are*
+ * shipped but failed to decode or instantiate.
  *
  * @module provider/Layers/ProviderInstanceRegistryHydration
  */
@@ -58,10 +59,23 @@ import { ProviderInstanceRegistryMutator } from "../Services/ProviderInstanceReg
 import { ProviderInstanceRegistryMutableLayer } from "./ProviderInstanceRegistryLive.ts";
 
 /**
+ * The driver kinds this build ships. Settings entries naming anything else
+ * are dropped here rather than surfaced as `"unavailable"` shadow snapshots,
+ * so a provider we no longer offer disappears from Settings, the model
+ * pickers, and the composer instead of showing up as a broken card. The
+ * stored config is left untouched on disk, so re-adding the driver later
+ * restores it.
+ */
+const SHIPPED_DRIVER_KINDS: ReadonlySet<string> = new Set(
+  BUILT_IN_DRIVERS.map((driver) => driver.driverKind as string),
+);
+
+/**
  * Synthesize a `ProviderInstanceConfigMap` from a `ServerSettings` snapshot.
  *
  * Strategy:
- *   1. Copy all explicit `settings.providerInstances` entries verbatim.
+ *   1. Copy every `settings.providerInstances` entry whose driver this build
+ *      ships, verbatim. Entries for unshipped drivers are dropped.
  *   2. For each built-in driver whose `defaultInstanceIdForDriver(id)` key
  *      is *not* already in the explicit map, synthesize an entry from the
  *      matching legacy `settings.providers.<kind>` blob.
@@ -73,7 +87,12 @@ import { ProviderInstanceRegistryMutableLayer } from "./ProviderInstanceRegistry
 export const deriveProviderInstanceConfigMap = (
   settings: ServerSettings,
 ): ProviderInstanceConfigMap => {
-  const merged: Record<string, ProviderInstanceConfig> = { ...settings.providerInstances };
+  const merged: Record<string, ProviderInstanceConfig> = {};
+  for (const [instanceId, entry] of Object.entries(settings.providerInstances)) {
+    if (SHIPPED_DRIVER_KINDS.has(entry.driver as string)) {
+      merged[instanceId] = entry;
+    }
+  }
 
   for (const driver of BUILT_IN_DRIVERS) {
     const instanceId = defaultInstanceIdForDriver(driver.driverKind);
@@ -110,8 +129,8 @@ export const deriveProviderInstanceConfigMap = (
  * shutdown without leaking.
  *
  * Errors inside the watcher are logged and swallowed — the registry's own
- * "unavailable" bucket already absorbs unknown drivers and invalid
- * configs, so the only way the watcher could fail is a settings stream
+ * "unavailable" bucket already absorbs invalid configs and failed instance
+ * creation, so the only way the watcher could fail is a settings stream
  * tear-down, which logs and exits cleanly.
  */
 const SettingsWatcherLive = Layer.effectDiscard(

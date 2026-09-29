@@ -277,6 +277,9 @@ describe("ProviderCommandReactor", () => {
     const interruptTurn = vi.fn((_: unknown) => input?.interruptTurnEffect?.() ?? Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
     const respondToUserInput = vi.fn<ProviderServiceShape["respondToUserInput"]>(() => Effect.void);
+    const rejectUserInput = vi.fn<NonNullable<ProviderServiceShape["rejectUserInput"]>>(
+      () => Effect.void,
+    );
     const stopSession = vi.fn((stopInput: unknown) =>
       (input?.stopSessionEffect?.() ?? Effect.void).pipe(
         Effect.tap(() =>
@@ -364,7 +367,9 @@ describe("ProviderCommandReactor", () => {
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
+      rejectUserInput: rejectUserInput as NonNullable<ProviderServiceShape["rejectUserInput"]>,
       stopSession: stopSession as ProviderServiceShape["stopSession"],
+      deleteSession: () => unsupported(),
       listSessions: () => Effect.succeed(runtimeSessions),
       getCapabilities: (_provider) =>
         Effect.succeed({
@@ -620,6 +625,7 @@ describe("ProviderCommandReactor", () => {
       interruptTurn,
       respondToRequest,
       respondToUserInput,
+      rejectUserInput,
       stopSession,
       renameBranch,
       pruneWorktrees,
@@ -4137,6 +4143,113 @@ describe("ProviderCommandReactor", () => {
       },
     });
   });
+
+  effectIt.effect(
+    "tells the provider to abandon a dismissible question instead of answering it",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createHarness());
+        const now = "2026-01-01T00:00:00.000Z";
+
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-session-set-for-user-input-dismiss"),
+          threadId: ThreadId.make("thread-1"),
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "running",
+            providerName: "opencode",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+
+        yield* harness.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make("cmd-user-input-requested"),
+          threadId: ThreadId.make("thread-1"),
+          activity: {
+            id: EventId.make("activity-user-input-requested"),
+            tone: "approval",
+            kind: "user-input.requested",
+            summary: "User input requested",
+            payload: {
+              requestId: "user-input-request-1",
+              dismissible: true,
+              questions: [
+                { id: "0", header: "Q", question: "Continue?", options: [], multiSelect: false },
+              ],
+            },
+            turnId: null,
+            createdAt: now,
+          },
+          createdAt: now,
+        });
+
+        yield* harness.engine.dispatch({
+          type: "thread.user-input.dismiss",
+          commandId: CommandId.make("cmd-user-input-dismiss"),
+          threadId: ThreadId.make("thread-1"),
+          requestId: asApprovalRequestId("user-input-request-1"),
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => harness.drain());
+        expect(harness.rejectUserInput.mock.calls[0]?.[0]).toEqual({
+          threadId: "thread-1",
+          requestId: "user-input-request-1",
+        });
+        expect(harness.respondToUserInput).not.toHaveBeenCalled();
+      }),
+  );
+
+  effectIt.effect("rejects dismissing a question the provider cannot abandon", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-native-user-input-requested"),
+        threadId: ThreadId.make("thread-1"),
+        activity: {
+          id: EventId.make("activity-native-user-input-requested"),
+          tone: "approval",
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: {
+            requestId: "user-input-request-2",
+            questions: [
+              { id: "0", header: "Q", question: "Continue?", options: [], multiSelect: false },
+            ],
+          },
+          turnId: null,
+          createdAt: now,
+        },
+        createdAt: now,
+      });
+
+      const rejected = yield* harness.engine
+        .dispatch({
+          type: "thread.user-input.dismiss",
+          commandId: CommandId.make("cmd-native-user-input-dismiss"),
+          threadId: ThreadId.make("thread-1"),
+          requestId: asApprovalRequestId("user-input-request-2"),
+          createdAt: now,
+        })
+        .pipe(Effect.flip);
+
+      expect(rejected).toMatchObject({
+        _tag: "OrchestrationCommandInvariantError",
+        detail: "This question needs an answer. Answer it or stop the turn.",
+      });
+      yield* Effect.promise(() => harness.drain());
+      expect(harness.rejectUserInput).not.toHaveBeenCalled();
+    }),
+  );
 
   it("normalizes stale Codex approval callbacks without faking approval resolution", async () => {
     const harness = await createHarness();

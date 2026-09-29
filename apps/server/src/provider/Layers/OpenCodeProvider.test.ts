@@ -283,7 +283,7 @@ beforeEach(() => {
   runtimeMock.reset();
 });
 
-it("keeps native and MCP commands while preserving compaction and separate skills", () => {
+it("keeps native, MCP and skill commands while preserving compaction and separate skills", () => {
   NodeAssert.deepEqual(
     openCodeCommandsToServerProviderSlashCommands([
       { name: "review", description: "Review changes", source: "command", hints: ["$ARGUMENTS"] },
@@ -293,8 +293,43 @@ it("keeps native and MCP commands while preserving compaction and separate skill
       { name: "mcp:search", source: "mcp", hints: ["query"] },
     ]).slice(1),
     [
-      { name: "review", description: "Review changes", input: { hint: "$ARGUMENTS" } },
-      { name: "mcp:search", input: { hint: "query" } },
+      {
+        name: "review",
+        source: "command",
+        description: "Review changes",
+        input: { hint: "$ARGUMENTS" },
+      },
+      { name: "skill", source: "skill" },
+      { name: "mcp:search", source: "mcp", input: { hint: "query" } },
+    ],
+  );
+});
+
+it("reports the agent, model and subtask a command forces, and marks a missing source", () => {
+  NodeAssert.deepEqual(
+    openCodeCommandsToServerProviderSlashCommands([
+      {
+        name: "review",
+        description: "  ",
+        agent: "plan",
+        model: "anthropic/claude-opus-5",
+        subtask: true,
+        hints: ["  ", "path"],
+      },
+      { name: "plain", hints: [] },
+      { name: "legacy", agent: "  ", model: "openai/gpt-5.4", subtask: false, hints: [] },
+    ]).slice(1),
+    [
+      {
+        name: "review",
+        source: "unknown",
+        input: { hint: "path" },
+        agent: "plan",
+        model: "anthropic/claude-opus-5",
+        subtask: true,
+      },
+      { name: "plain", source: "unknown" },
+      { name: "legacy", source: "unknown", model: "openai/gpt-5.4" },
     ],
   );
 });
@@ -376,6 +411,47 @@ it.layer(testLayer)("checkOpenCodeProviderStatus", (it) => {
         "Failed to execute OpenCode CLI health check: OpenCode CLI version probe timed out after 4 seconds.",
       );
     }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("offers plan and build from the picker and hides T3's own mode toggle", () =>
+    Effect.gen(function* () {
+      // The agent list an OpenCode install actually reports: two primary agents
+      // the user picks between, plus OpenCode-internal and subagent entries.
+      runtimeMock.state.inventory = {
+        providerList: {
+          connected: ["openai"],
+          all: [
+            {
+              id: "openai",
+              name: "OpenAI",
+              models: { "gpt-5.4": { id: "gpt-5.4", name: "GPT-5.4", variants: {} } },
+            },
+          ],
+          default: {},
+        },
+        agents: [
+          { name: "build", hidden: false, mode: "primary" },
+          { name: "compaction", hidden: true, mode: "primary" },
+          { name: "explore", hidden: false, mode: "subagent" },
+          { name: "plan", hidden: false, mode: "primary" },
+          { name: "summary", hidden: true, mode: "primary" },
+        ],
+      };
+
+      const snapshot = yield* checkProvider(makeOpenCodeSettings());
+      const model = snapshot.models.find((entry) => entry.slug === "openai/gpt-5.4");
+      const agentDescriptor = model?.capabilities?.optionDescriptors?.find(
+        (descriptor) => descriptor.id === "agent" && descriptor.type === "select",
+      );
+
+      NodeAssert.ok(agentDescriptor && agentDescriptor.type === "select");
+      NodeAssert.deepEqual(agentDescriptor.options, [
+        { id: "build", label: "Build", isDefault: true },
+        { id: "plan", label: "Plan" },
+      ]);
+      // T3's plan/build toggle stays off: the Agent select is the only surface.
+      NodeAssert.equal(snapshot.showInteractionModeToggle, false);
+    }),
   );
 
   it.effect("emits OpenCode variant defaults so trait picker can resolve a visible selection", () =>
